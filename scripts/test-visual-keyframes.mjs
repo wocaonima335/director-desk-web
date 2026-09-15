@@ -1,0 +1,20 @@
+import fs from 'node:fs/promises';import assert from 'node:assert/strict';import {createServer} from 'vite';import {chromium} from 'playwright-core';
+const server=await createServer({server:{host:'127.0.0.1',port:0,watch:{ignored:['**/tmp/**','**/.local/**']}}});await server.listen();const browser=await chromium.launch({channel:'chrome',headless:true});
+try{const page=await browser.newPage({viewport:{width:1440,height:900}}),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text().slice(0,1500));});await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`);await page.waitForFunction(()=>window.__director);
+const id=await page.evaluate(async()=>{const {createScene}=await import('/src/scenes.ts');const {entity}=await import('/src/model.ts');const p=createScene('blank'),e=entity('prop','cube','形变复现');p.entities.push(e);window.__director.replaceProject(p);return e.id;});
+await page.locator(`[data-select="${id}"]`).click();await page.locator('[data-inspect="surface"]').click();await page.locator('#deform-type').selectOption('twist');
+const state=()=>page.evaluate(id=>({input:document.querySelector('#visual-value')?.value,deform:window.__director.getProject().entities.find(e=>e.id===id)?.deform}),id);
+await page.locator('#visual-value').fill('0.23');await page.locator('#visual-key').click();
+assert.deepEqual((await state()).deform.amount.keys,[{time:0,value:.23}], 'one click records the visible decimal without a blur/reset');
+await page.evaluate(()=>window.__director.setTime(2));await page.locator('#visual-value').fill('1.37');await page.locator('#visual-key').click();
+assert.deepEqual((await state()).deform.amount.keys,[{time:0,value:.23},{time:2,value:1.37}]);
+await page.locator('#visual-value').fill('20');await page.locator('#visual-key').click();assert.equal((await state()).input,'20');assert.equal((await state()).deform.amount.keys[1].value,1.37,'out of range input must not record the cached value');
+await page.locator('#visual-value').fill('1.37');await page.locator('#visual-key').click();
+const samples=await page.evaluate(id=>{const api=window.__director;return [0,1,2,0].map(t=>{api.setTime(t);let first;api.getEngine().models.get(id).traverse(o=>{if(!first&&o.isMesh)first=o;});return [...first.geometry.getAttribute('position').array];});},id);
+assert.deepEqual(samples[0],samples[3],'rewind restores exactly the same deformed geometry');assert.notDeepEqual(samples[0],samples[1]);assert.notDeepEqual(samples[1],samples[2]);
+await page.locator('[data-timeline-view="curves"]').click();assert.ok((await page.locator('#timeline-curves').textContent()).includes('amount'));
+await page.locator('[data-inspect="surface"]').click();
+await page.evaluate(()=>window.__director.setTime(0));await page.locator('[data-surface-field="appearance.transmission"]').fill('0.23');await page.locator('[data-surface-section="appearance"] [data-surface-action="key"]').click();
+await page.evaluate(()=>window.__director.setTime(2));await page.locator('[data-surface-field="appearance.transmission"]').fill('0.87');await page.locator('[data-surface-section="appearance"] [data-surface-action="key"]').click();
+assert.deepEqual(await page.evaluate(id=>window.__director.getProject().entities.find(e=>e.id===id).surface.transmission.keys,id),[{time:0,value:.23},{time:2,value:.87}]);
+assert.deepEqual(errors,[]);console.log('Visual keyframe UI: decimal values, first-click recording, rejection, interpolation and rewind passed.');}finally{await browser.close();await server.close();}

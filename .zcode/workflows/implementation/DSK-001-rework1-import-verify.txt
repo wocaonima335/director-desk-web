@@ -1,0 +1,16 @@
+# DSK-001 REWORK R1 导入一致性最终核验
+时间: 2026-09-15T08:40:36Z
+上游 HEAD: eee9234ae38ffc61a7d4576298a0f23739474597  上游 status 差异行数: 0
+目标 HEAD: 0136ac52780b9a9380c7601d17f6b9bbbc9c20e3
+方法: 对上游 eee9234 git ls-tree -r 全部条目逐文件 cmp 目标工作树；差异文件再用去除CR后的cmp复判是否仅换行差异。
+
+## 分类计数
+total=548 identical=542 eol_only=2 content_diff=4 missing=0
+
+## 差异明细
+CONTENT_DIFF .gitignore
+CONTENT_DIFF desktop/file-host.cjs
+CONTENT_DIFF desktop/files.cjs
+EOL_ONLY skills/director-desk/scripts/project-tool.mjs
+EOL_ONLY src/automation/builtin-skill.json
+CONTENT_DIFF tests/file-host.test.cjs

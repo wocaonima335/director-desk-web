@@ -1,0 +1,69 @@
+task_id: DSK-002
+title: "冻结一期需求、UI方向与本地模型决策"
+status: PASS # director-reviewer第2轮文档技术复审通过；人工/Win11/安装包验收单独保留
+source_root: "E:/myProgram/DirectorDesk/director-desk-web"
+base_commit: "0136ac52780b9a9380c7601d17f6b9bbbc9c20e3"
+initial_worktree: "继承 DSK-001 已实施增量；执行前只读记录 git status 和任务相关文件hash。源上游 eee9234ae38ffc61a7d4576298a0f23739474597 不修改。"
+contract_version: "后续 DSK-003 冻结 dsk.v1，本任务不实现契约"
+approval:
+  approved: true
+  reference: "本会话 ExitPlanMode 已批准第一阶段001-008+016总体计划；随后Ethan明确要求继续。"
+goal: "形成与已批准计划一致的可追踪决策、UI流程、示例与环境记录，明确未验证事项。"
+context_files:
+  - "E:/myProgram/DirectorDesk/director-desk-web/AGENTS.md"
+  - "E:/myProgram/DirectorDesk/director-desk-web/.zcode/workflows/README.md"
+  - "E:/myProgram/DirectorDesk/director-desk-web/任务列表.md"
+  - "E:/myProgram/DirectorDesk/director-desk-web/plan.md"
+  - "E:/myProgram/DirectorDesk/director-desk-web/implementation/DSK-001.md"
+allowed_changes:
+  - "本任务单实施字段与任务前状态证据。"
+  - "implementation/DSK-002.md：决策、UI流程、示例、权限预算及实测环境记录。"
+  - "任务列表.md仅002状态及必要决策引用；必要时plan.md最小追加批准决策索引，不改路线。"
+non_goals:
+  - "不写业务代码、不执行003及以后功能、不修改原代理配置或工作流规范。"
+  - "不真实模型调用、不消费付费资源、不commit/push、不新增依赖。"
+acceptance:
+  - id: A1
+    criterion: "记录Windows桌面、开发代号DirectorDesk Desktop Preview、深色中性/蓝强调任务式UI与保留高级入口；范围仅001-008+016。"
+    evidence_required: "实施决策与批准计划逐项对应。"
+  - id: A2
+    criterion: "五套件：双人对话、入离场、跟拍、推进/环绕、简单对峙；单镜头5-15秒/1-2人物/单连续机位/24fps/9:16或16:9，同场景3-5镜头15-75秒。"
+    evidence_required: "完整单镜头样例、3镜头样例、缺失信息样例，角色与环境全部由样例明确提供。"
+  - id: A3
+    criterion: "默认mock，单OpenAI-compatible chat路径未配置真实endpoint/model；真实模型预算0；显式主进程剪贴板导入密钥，renderer仅状态，安全存储不可用仅内存。"
+    evidence_required: "模型/权限边界与简易/高级交互流程；未实测供应商不声称兼容。"
+  - id: A4
+    criterion: "记录开发代理实际配置与调用事实，区别产品BYOK；工具链和设备数据取自真实命令/001证据，未知明确注明。"
+    evidence_required: "开发coder实际配置 builtin:zai/GLM-5.3-Flash；planner/reviewer的模型字段读取核对但不从提示词猜实际后台模型；注明一次review provider拒绝后重试成功；OS/Node/Electron/硬件最小必要证据。"
+verification:
+  - command: "git status --short; node --version; npm --version"
+    cwd: "E:/myProgram/DirectorDesk/director-desk-web"
+    expected_result: "只读核实当前状态和工具链，记录退出码。"
+side_effects_approved:
+  - "仅允许范围内文档写入及只读环境检查；不安装或模型请求。"
+dependencies:
+  - "DSK-001 技术复审PASS后才能开始；人工/Win11/安装包待验收单独保留。"
+rollback: "仅撤回002新增与文档增量，不改001业务代码、初始保护文件或真实历史证据。"
+implementation:
+  agent: director-coder
+  changed_files:
+    - "implementation/DSK-002.md"
+    - "任务列表.md"
+    - ".zcode/workflows/tasks/DSK-002.yaml"
+    - "tmp/dsk-002-baseline-hashes.txt"
+    - "tmp/dsk-002-env-check.txt"
+  checks:
+    - "git status --short / node --version / npm --version 只读核实，退出码均0（tmp/dsk-002-env-check.txt）"
+    - "任务前sha256快照与git status存证（tmp/dsk-002-baseline-hashes.txt），未重跑001测试构建"
+    - "三个.zcode/agents/director-*.md model字段只读取证，未修改配置"
+  blockers: []
+review:
+  agent: director-reviewer
+  verdict: PASS # agent_6764fb9d-3c9f-408d-bf5d-f7bf605c28d2复审：R1/N1/N2已关闭，无剩余阻断
+  findings:
+    - "R1(阻断,已修): S2镜头2'相对站位不变'与苏晴接近矛盾、镜头3'道具位置不变'与放下纸箱矛盾；已按固定对象/时段重写，末态承接核对一致，时长/画幅/机位不变"
+    - "N1(非阻断,已修): §2补充本轮008终点仅为计划审阅/可应用独立预览，不含009提交与任务级撤销及后续导出"
+    - "N2(非阻断,已修): §6退出码声明收窄为git/node/npm三项实测0；OS/CPU/GPU/内存/Electron仅值；Node/npm版本标注为审查复核值"
+  unverified:
+    - "三代理后台精确模型路由、真实供应商兼容性、人工窗口/Win11/安装包验收"
+  rework_rounds: 1

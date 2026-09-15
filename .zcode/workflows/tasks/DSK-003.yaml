@@ -1,0 +1,100 @@
+task_id: DSK-003
+title: "IPC 与流水线共享契约 dsk.v1"
+status: IMPLEMENTED # 003编码完成，待director-reviewer独立审查；不表示已验收/提交/发布
+source_root: "E:/myProgram/DirectorDesk/director-desk-web"
+base_commit: "0136ac52780b9a9380c7601d17f6b9bbbc9c20e3"
+initial_worktree: "继承已批准001/002增量和主会话新增003任务单；执行前记录完整git状态和本任务将触及文件的hash及备份引用，不能假设未跟踪文件都是本任务新增。"
+contract_version: "dsk.v1（本任务实现并冻结）"
+approval:
+  approved: true
+  reference: "本会话ExitPlanMode已批准001-008+016，包括dsk.v1契约、受限IPC与现有zod/esbuild复用。"
+goal: "建立两端一致、严格校验的纯DTO及最小受限IPC接线，作为后续存储/协调器/提案基础。"
+context_files:
+  - "E:/myProgram/DirectorDesk/director-desk-web/AGENTS.md"
+  - "E:/myProgram/DirectorDesk/director-desk-web/任务列表.md"
+  - "E:/myProgram/DirectorDesk/director-desk-web/框架设计.md"
+  - "E:/myProgram/DirectorDesk/director-desk-web/implementation/DSK-002.md"
+  - "E:/myProgram/DirectorDesk/director-desk-web/desktop/integration.cjs"
+  - "E:/myProgram/DirectorDesk/director-desk-web/desktop/preload.cjs"
+  - "E:/myProgram/DirectorDesk/director-desk-web/src/automation/desktop-types.ts"
+  - "E:/myProgram/DirectorDesk/director-desk-web/src/automation/validate.ts"
+  - "E:/myProgram/DirectorDesk/director-desk-web/scripts/prepare-desktop.mjs"
+  - "E:/myProgram/DirectorDesk/director-desk-web/tsconfig.json"
+allowed_changes:
+  - "新增shared/contracts/纯DTO、运行时schema、版本及fixture；保持无DOM/Electron依赖。"
+  - "desktop/preload.cjs、desktop/integration.cjs、src/automation/desktop-types.ts的最小新IPC接线。"
+  - "tsconfig.json、scripts/prepare-desktop.mjs的共享类型检查及现有esbuild打包接线。"
+  - "tests/dsk-contracts.test.ts、tests/dsk-contracts.test.cjs及对应tests/fixtures/dsk-contracts/（按现有glob发现）。"
+  - "必要scripts/test-dsk-contracts-desktop.mjs桌面契约验证脚本；不增加依赖。"
+  - "implementation/DSK-003.md、本任务单、任务列表003状态及本任务取证文件。"
+  - ".gitignore 仅追加一行 !/shared/（主会话授权：shared/ 为人工批准计划新增目录，该白名单例外是其可跟踪性的必要接线，不增加业务功能/依赖/公共契约范围；原规则保持不变）。"
+non_goals:
+  - "不实现004存储、005UI、007执行协调器或016模型调用；不返回假成功。"
+  - "不改旧工程格式、不变更已有公共IPC行为、不随意扩展动作、不新增依赖/改锁版本。"
+  - "不修改原保护文件、上游、代理配置，不commit/push/真实付费调用。"
+acceptance:
+  - id: A1
+    criterion: "严格纯DTO覆盖StorySpec、ShotPlan、CompiledShotProposal、WorkflowState/Event、Approval、SnapshotRef、ProviderRequest/response/usage、错误码；版本dsk.v1；roleId与entityId明确区分。"
+    evidence_required: "类型检查及有效/无效fixture；schema对象strict，版本、hash/revision/scope、身份和时长约束互相一致。"
+  - id: A2
+    criterion: "两端同一fixture校验结果一致；拒绝未知字段、未知版本、超长/超深输入、NaN/Infinity、重复角色、非法枚举/数值和越界时长；单镜头或同场景3-5镜头，单镜头5-15秒，总长与镜头和一致。"
+    evidence_required: "源码导入与实际CJS bundle使用同份fixture的自动测试及真实prepared desktop加载验证。"
+  - id: A3
+    criterion: "受限项目/计划/审批/状态/模型设置动作验证sender与主frame并校验参数；没有任意执行代码/路径/工具通道；未实现的合法动作返回NOT_IMPLEMENTED，非法动作清晰拒绝。"
+    evidence_required: "错误来源/子frame/非法参数测试，现有IPC回归不降低安全选项；路径由主进程授权不透明句柄表达，凭据不包含在renderer DTO。"
+  - id: A4
+    criterion: "审批绑定hash/范围/预算，事件带workflow/step/request及序号，unknown和未实现错误语义明确；模型只可提出套件/语义参数，不能以DTO传任意操作执行请求。"
+    evidence_required: "结构说明和反例；CompiledShotProposal内部操作与模型提案边界分开，操作结构复用已有EditOperation但不假装本任务已经编译执行。"
+  - id: A5
+    criterion: "契约确实进入类型检查与prepared desktop构建，新增与现有测试通过。"
+    evidence_required: "npm test、npm run build、npm run desktop:prepare退出码和日志；必要Electron回环验证记录，未人工验收单列。"
+verification:
+  - command: "npm test"
+    cwd: "E:/myProgram/DirectorDesk/director-desk-web"
+    expected_result: "现有和新增全部通过，不删除/跳过失败来满足。"
+  - command: "npm run build"
+    cwd: "E:/myProgram/DirectorDesk/director-desk-web"
+    expected_result: "包括共享模块的类型检查和bundle构建成功。"
+  - command: "npm run desktop:prepare"
+    cwd: "E:/myProgram/DirectorDesk/director-desk-web"
+    expected_result: "实际prepared产物包含可运行共享校验代码。"
+side_effects_approved:
+  - "现有构建产物、隔离测试数据与本地Electron/Chrome验证；不得访问真实供应商。"
+dependencies:
+  - "DSK-001技术PASS"
+  - "DSK-002独立PASS后才启动本任务"
+rollback: "按任务前文件快照只撤回003增量，保留001/002及初始修改；不reset/clean。"
+implementation:
+  agent: director-coder
+  changed_files:
+    - "shared/contracts/version.ts（新增：dsk.v1 版本常量，纯模块）"
+    - "shared/contracts/schema.ts（新增：全部严格 zod schema；roleId/entityId 品牌化区分；帧对齐/时长/去重/审批绑定/usage 语义跨字段校验）"
+    - "shared/contracts/dto.ts（新增：由 schema 推导的纯 DTO 类型，类型与运行时校验一致）"
+    - "shared/contracts/actions.ts（新增：动作白名单、逐动作 payload schema、信封 schema、dispatchDskRequest、isTrustedDskFrame、深度/体积/NaN/原型键扫描）"
+    - "shared/contracts/index.ts（新增：公共出口，无 DOM/Electron/Node 依赖）"
+    - "tests/fixtures/dsk-contracts/cases.json（新增：69 例共享 fixture，两端 harness 同源）"
+    - "tests/dsk-contracts.test.ts（新增：源码导入 harness + EditOperation 结构兼容编译期断言）"
+    - "tests/dsk-contracts.test.cjs（新增：esbuild CJS bundle harness，同一 fixture/特例/信任用例）"
+    - "scripts/test-dsk-contracts-desktop.mjs（新增：真实 prepared Electron 回环验证，CDP 驱动）"
+    - "desktop/integration.cjs（修改：新增 director-dsk 受限通道 + 卸载清理；旧通道行为未动）"
+    - "desktop/preload.cjs（修改：暴露 directorDesktop.dsk，注入版本字面量；旧 API 未动）"
+    - "src/automation/desktop-types.ts（修改：dsk 方法类型，类型导入共享契约）"
+    - "tsconfig.json（修改：include 增加 shared）"
+    - "任务列表.md（修改：003 已实施待审；002 按主会话授权同步技术审查通过）"
+    - ".zcode/workflows/tasks/DSK-003.yaml、implementation/DSK-003.md、tmp/dsk-003-*（本任务单/报告/取证）"
+    - "scripts/prepare-desktop.mjs：未修改（0 diff）——integration.cjs 的现有 esbuild bundle 自动内联共享层与 zod，license 清单经 metafile 自动收录 zod；见报告 A5"
+  checks:
+    - "npm test → EXIT=0（423 通过含 2 个新 harness；0 失败 0 跳过）"
+    - "npm run build → EXIT=0（tsc 含 shared 类型检查 + vite build + 隐私检查）"
+    - "npm run desktop:prepare → EXIT=0（staged integration.cjs 含契约标记并被 --desktop 隐私扫描覆盖）"
+    - "node scripts/test-dsk-contracts-desktop.mjs → EXIT=0（真实 prepared 桌面回环：合法动作 NOT_IMPLEMENTED、非法动作 INVALID_ACTION、非法 spec INVALID_PAYLOAD、旧 IPC 完整）"
+    - "git check-ignore / git status → shared/contracts 5 文件 EXIT=1 无忽略命中（可跟踪），目录命中 !/shared/ 例外，git status 列出 ?? shared/；原规则未动（tmp/dsk-003-gitignore-verify.txt）；按主会话指示未重跑构建/业务测试"
+  blockers: []
+review:
+  agent: director-reviewer
+  verdict: PENDING
+  findings: []
+  unverified:
+    - "人工 Electron 窗口走查、Windows 11 x64、真实供应商兼容性：本轮未做，保留为独立人工验收项"
+    - "npm ci 未重跑（复用 DSK-001 已装依赖与锁定版本，本轮无新增依赖）"
+  rework_rounds: 0

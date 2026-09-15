@@ -1,0 +1,82 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { _electron } from 'playwright-core';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import net from 'node:net';
+import { randomBytes } from 'node:crypto';
+
+await fs.mkdir('tmp', { recursive: true });
+const directory = await fs.mkdtemp(path.resolve('tmp/skills-desktop-'));
+const source = path.join(directory, 'source'), profile = path.join(directory, 'profile');
+await fs.mkdir(path.join(source, 'references'), { recursive: true });
+await fs.writeFile(path.join(source, 'SKILL.md'), '---\nname: 我的动作创作\ndescription: 按场景目标安排动作与人物反应。\n---\n技能正文第一版');
+await fs.writeFile(path.join(source, 'references/guide.md'), '附件内容：先确认人物目标。');
+const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+let application, page, client;
+const launch = async () => {
+    application = await _electron.launch({ executablePath: createRequire(import.meta.url)('electron'), args: [path.resolve(process.env.DIRECTOR_TEST_APP || '.audit/desktop-app'), `--director-test-profile=${profile}`], env });
+    page = await application.firstWindow(); await page.waitForSelector('#ai-toggle');
+    await page.locator('#ai-toggle').click(); await page.locator('#ai-skills-toggle').click();
+    await page.waitForFunction(() => document.querySelector('#skill-select').options.length > 0);
+};
+try {
+    await launch(); const errors = []; page.on('pageerror', e => errors.push(e.message));
+    await application.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, source);
+    await page.locator('[data-skill-import="folder"]').click();
+    await page.waitForFunction(() => document.querySelector('#skill-content').value.includes('技能正文第一版'));
+    const id = await page.locator('#skill-select').inputValue();
+    assert.notEqual(id, 'builtin'); assert.equal(await page.locator('#skill-enabled').isChecked(), true);
+    await page.locator('#skill-file').selectOption('references/guide.md');
+    await page.waitForFunction(() => document.querySelector('#skill-content').value.includes('先确认人物目标'));
+    await page.locator('#skill-enabled').uncheck();
+    await page.waitForFunction(() => !document.querySelector('#skill-enabled').disabled);
+    await application.close(); await launch();
+    await page.locator('#skill-select').selectOption(id); assert.equal(await page.locator('#skill-enabled').isChecked(), false);
+    await page.locator('#skill-enabled').check(); await page.waitForFunction(() => !document.querySelector('#skill-enabled').disabled);
+    const index = JSON.parse(await fs.readFile(path.join(profile, 'skills/index.json'), 'utf8'));
+    const installed = index.entries.find(e => e.id === id), oldVersion = installed.version;
+    await fs.writeFile(path.join(profile, 'skills', installed.folder, 'SKILL.md'), '# 我的动作创作\n技能正文第二版');
+    await page.locator('#skill-reload').click();
+    await page.waitForFunction(() => document.querySelector('#skill-content').value.includes('技能正文第二版'));
+    assert.ok(!(await page.locator('#skill-meta').inputValue()).includes(oldVersion));
+    // Small assistant width and height: all controls fit; only text areas may scroll.
+    await page.evaluate(() => { const panel = document.querySelector('#ai-panel'); panel.style.width = '340px'; panel.style.height = '620px'; });
+    const overflow = await page.evaluate(() => [...document.querySelectorAll('#ai-skills,#ai-skills button,#ai-skills input,#ai-skills select')].filter(e => {
+        const r = e.getBoundingClientRect(), outer = document.querySelector('#ai-panel').getBoundingClientRect();
+        return r.left < outer.left || r.right > outer.right || r.bottom > outer.bottom;
+    }).map(e => e.id || e.tagName));
+    assert.deepEqual(overflow, []);
+    await page.screenshot({ path: path.join(directory, 'skills.png') });
+    // Assign an ephemeral test port without touching the user's MCP connection.
+    const probe = net.createServer(); await new Promise(r => probe.listen(0, '127.0.0.1', r)); const port = probe.address().port; await new Promise(r => probe.close(r));
+    const token = randomBytes(32).toString('hex');
+    const secret = await application.evaluate(({ safeStorage }, value) => safeStorage.encryptString(value).toString('base64'), token);
+    await fs.writeFile(path.join(profile, 'mcp-connection.json'), JSON.stringify({ version: 1, port, secret }));
+    const connection = await page.evaluate(async () => window.directorDesktop.mcp(true)); assert.equal(connection.ok, true);
+    client = new Client({ name: 'skill-verification', version: '1.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(connection.data.url), { requestInit: { headers: { Authorization: 'Bearer ' + token } } }));
+    const tool = async args => JSON.parse((await client.callTool({ name: 'director_skill', arguments: args })).content[0].text);
+    const builtin = (await tool({})).data;
+    assert.ok(builtin.files.includes('references/camera.md'));
+    assert.equal((await tool({knownVersion: builtin.version})).data.unchanged, true);
+    const cameraGuide = (await tool({path:'references/camera.md',knownVersion:builtin.version})).data;
+    assert.equal(cameraGuide.unchanged, false);
+    assert.equal(cameraGuide.instructions, (await fs.readFile('skills/director-desk/references/camera.md','utf8')).replace(/\r\n/g,'\n'));
+    assert.equal(Object.hasOwn(cameraGuide, 'references'), false);
+    assert.equal((await tool({path:'../SKILL.md'})).ok, false);
+    assert.ok((await tool({ action: 'list' })).data.skills.some(e => e.id === id));
+    assert.match((await tool({ id })).data.instructions, /第二版/);
+    await page.locator('#skill-enabled').uncheck(); await page.waitForFunction(() => !document.querySelector('#skill-enabled').disabled);
+    assert.equal((await tool({ id })).ok, false);
+    assert.ok(!(await tool({ action: 'list' })).data.skills.some(e => e.id === id));
+    await page.locator('#skill-select').selectOption('builtin'); await page.locator('#skill-enabled').uncheck();
+    await page.waitForFunction(() => !document.querySelector('#skill-enabled').disabled); assert.equal((await tool({})).ok, false);
+    await page.locator('#skill-select').selectOption(id); await page.locator('#skill-remove').click();
+    await page.waitForFunction(() => document.querySelector('#skill-select').options.length === 1);
+    assert.match(await fs.readFile(path.join(source, 'SKILL.md'), 'utf8'), /第一版/);
+    assert.deepEqual(errors, []);
+    console.log('Desktop skill import, references, enable/disable, restart, reload, layout, removal and real MCP reads passed.');
+} finally { await client?.close(); await application?.close(); }

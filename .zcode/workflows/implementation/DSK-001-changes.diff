@@ -1,0 +1,91 @@
+# DSK-001 相对上游 eee9234ae38ffc61a7d4576298a0f23739474597 的代码差异（其余 544 个导入文件与上游工作树逐字节一致）
+
+## .gitignore
+--- a/.gitignore
++++ b/.gitignore
+@@ -106,3 +106,12 @@
+ !/scripts/builtin-skill-files.cjs
+ 
+ !/scripts/verify-file-permissions-desktop.mjs
++
++# This repository additionally tracks planning documents and the multi-agent
++# workflow configuration; upstream's source-only whitelist must not hide them.
++!/AGENTS.md
++!/plan.md
++!/任务列表.md
++!/框架设计.md
++!/项目评估.md
++!/.zcode/
+
+## desktop/file-host.cjs
+--- a/desktop/file-host.cjs
++++ b/desktop/file-host.cjs
+@@ -7,6 +7,13 @@
+     try { await fs.writeFile(temporary, content, { flag: 'wx' }); await fs.rename(temporary, filename); }
+     finally { await fs.rm(temporary, { force: true }); }
+ }
++/** Packaged apps default to the user's Documents folder; development builds keep
++ * both default directories inside the isolated test profile (userData) so real
++ * user documents are never touched by desktop:dev/desktop:start runs. */
++function defaultFileLocations({ isPackaged, documents, userData }) {
++    const root = isPackaged ? documents : userData;
++    return { projects: path.join(root, 'DirectorDesk', 'Projects'), exports: path.join(root, 'DirectorDesk', 'Exports') };
++}
+ function createFileHost({ directory, defaults, chooseDirectory, chooseSave }) {
+     const configFile = path.join(directory, 'file-locations.json');
+     let locations = { ...defaults }, saving = false;
+@@ -74,4 +81,4 @@
+         },
+     };
+ }
+-module.exports = { createFileHost };
++module.exports = { createFileHost, defaultFileLocations };
+
+## desktop/files.cjs
+--- a/desktop/files.cjs
++++ b/desktop/files.cjs
+@@ -1,17 +1,16 @@
+ const { app, ipcMain, dialog } = require('electron');
+ const path = require('node:path');
+ const { randomUUID } = require('node:crypto');
+-const { createFileHost } = require('./file-host.cjs');
++const { createFileHost, defaultFileLocations } = require('./file-host.cjs');
+ const { installFilePermissions } = require('./file-permissions.cjs');
+ 
+ function attachFiles(window) {
+     const session = window.webContents.session;
+     installFilePermissions(session, window.webContents);
+     const trusted = event => event.sender === window.webContents && event.senderFrame?.url === 'director://app/';
+-    const host = createFileHost({ directory: app.getPath('userData'), defaults: {
+-        projects: path.join(app.getPath('documents'), 'DirectorDesk', 'Projects'),
+-        exports: path.join(app.getPath('documents'), 'DirectorDesk', 'Exports'),
+-    }, chooseDirectory: async (kind, defaultPath) => {
++    const host = createFileHost({ directory: app.getPath('userData'), defaults: defaultFileLocations({
++        isPackaged: app.isPackaged, documents: app.getPath('documents'), userData: app.getPath('userData'),
++    }), chooseDirectory: async (kind, defaultPath) => {
+         const result = await dialog.showOpenDialog(window, { title: kind === 'projects' ? '默认工程目录' : '默认导出目录', defaultPath, properties: ['openDirectory', 'createDirectory'] });
+         return result.canceled ? null : result.filePaths[0];
+     }, chooseSave: async defaultPath => {
+
+## tests/file-host.test.cjs
+--- a/tests/file-host.test.cjs
++++ b/tests/file-host.test.cjs
+@@ -3,7 +3,17 @@
+ const fs = require('node:fs/promises');
+ const path = require('node:path');
+ const os = require('node:os');
+-const { createFileHost } = require('../desktop/file-host.cjs');
++const { createFileHost, defaultFileLocations } = require('../desktop/file-host.cjs');
++
++test('development defaults stay inside the isolated profile; packaged apps keep Documents', () => {
++    const documents = 'C:\\Users\\dev\\Documents', userData = 'D:\\repo\\.local\\desktop-dev-profile';
++    const development = defaultFileLocations({ isPackaged: false, documents, userData });
++    assert.deepEqual(development, { projects: path.join(userData, 'DirectorDesk', 'Projects'), exports: path.join(userData, 'DirectorDesk', 'Exports') });
++    assert.equal(development.projects.startsWith(userData), true);
++    assert.equal(development.exports.startsWith(userData), true);
++    assert.deepEqual(defaultFileLocations({ isPackaged: true, documents, userData }),
++        { projects: path.join(documents, 'DirectorDesk', 'Projects'), exports: path.join(documents, 'DirectorDesk', 'Exports') });
++});
+ 
+ test('video export uses the default directory, numbers collisions atomically and rejects paths', async () => {
+     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'director-export-'));

@@ -1,0 +1,2253 @@
+{
+  "contractVersion": "dsk.v1",
+  "note": "DSK-003 shared fixtures: both tests/dsk-contracts.test.ts (source import) and tests/dsk-contracts.test.cjs (bundled CJS) run every case and must agree.",
+  "cases": [
+    {
+      "id": "storyspec-valid-single",
+      "schema": "StorySpec",
+      "valid": true,
+      "data": {
+        "version": "dsk.v1",
+        "specId": "spec-0001",
+        "title": "天台交接",
+        "premise": "夜晚城市天台，林夏向陈默递出U盘，陈默迟疑后接过。",
+        "style": "冷色调写实，侧逆光",
+        "mode": "single-shot",
+        "aspect": "9:16",
+        "fps": 24,
+        "characters": [
+          {
+            "roleId": "lin-xia",
+            "name": "林夏",
+            "ageRange": "28岁",
+            "gender": "女",
+            "look": "齐肩短发",
+            "wardrobe": "深灰风衣"
+          },
+          {
+            "roleId": "chen-mo",
+            "name": "陈默",
+            "ageRange": "32岁",
+            "gender": "男",
+            "look": "平头",
+            "wardrobe": "蓝色工装外套"
+          }
+        ],
+        "environment": {
+          "location": "城市天台",
+          "summary": "夜晚天台，混凝土护栏，背景虚化城市灯光",
+          "timeOfDay": "night"
+        },
+        "targetDurationSec": 8
+      }
+    },
+    {
+      "id": "storyspec-valid-multi",
+      "schema": "StorySpec",
+      "valid": true,
+      "data": {
+        "version": "dsk.v1",
+        "specId": "spec-0002",
+        "title": "天台交接",
+        "premise": "夜晚城市天台，林夏向陈默递出U盘，陈默迟疑后接过。",
+        "style": "冷色调写实，侧逆光",
+        "mode": "multi-shot",
+        "aspect": "9:16",
+        "fps": 24,
+        "characters": [
+          {
+            "roleId": "lin-xia",
+            "name": "林夏",
+            "ageRange": "28岁",
+            "gender": "女",
+            "look": "齐肩短发",
+            "wardrobe": "深灰风衣"
+          },
+          {
+            "roleId": "chen-mo",
+            "name": "陈默",
+            "ageRange": "32岁",
+            "gender": "男",
+            "look": "平头",
+            "wardrobe": "蓝色工装外套"
+          }
+        ],
+        "environment": {
+          "location": "城市天台",
+          "summary": "夜晚天台，混凝土护栏，背景虚化城市灯光",
+          "timeOfDay": "night"
+        },
+        "targetDurationSec": 30,
+        "requestedShots": 3
+      }
+    },
+    {
+      "id": "storyspec-invalid-unknown-field",
+      "schema": "StorySpec",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "specId": "spec-0001",
+        "title": "天台交接",
+        "premise": "夜晚城市天台，林夏向陈默递出U盘，陈默迟疑后接过。",
+        "style": "冷色调写实，侧逆光",
+        "mode": "single-shot",
+        "aspect": "9:16",
+        "fps": 24,
+        "characters": [
+          {
+            "roleId": "lin-xia",
+            "name": "林夏",
+            "ageRange": "28岁",
+            "gender": "女",
+            "look": "齐肩短发",
+            "wardrobe": "深灰风衣"
+          },
+          {
+            "roleId": "chen-mo",
+            "name": "陈默",
+            "ageRange": "32岁",
+            "gender": "男",
+            "look": "平头",
+            "wardrobe": "蓝色工装外套"
+          }
+        ],
+        "environment": {
+          "location": "城市天台",
+          "summary": "夜晚天台，混凝土护栏，背景虚化城市灯光",
+          "timeOfDay": "night"
+        },
+        "targetDurationSec": 8,
+        "shotList": []
+      }
+    },
+    {
+      "id": "storyspec-invalid-duplicate-role",
+      "schema": "StorySpec",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "specId": "spec-0001",
+        "title": "天台交接",
+        "premise": "夜晚城市天台，林夏向陈默递出U盘，陈默迟疑后接过。",
+        "style": "冷色调写实，侧逆光",
+        "mode": "single-shot",
+        "aspect": "9:16",
+        "fps": 24,
+        "characters": [
+          {
+            "roleId": "lin-xia",
+            "name": "林夏",
+            "ageRange": "28岁",
+            "gender": "女",
+            "look": "齐肩短发",
+            "wardrobe": "深灰风衣"
+          },
+          {
+            "roleId": "lin-xia",
+            "name": "陈默",
+            "ageRange": "32岁",
+            "gender": "男",
+            "look": "平头",
+            "wardrobe": "蓝色工装外套"
+          }
+        ],
+        "environment": {
+          "location": "城市天台",
+          "summary": "夜晚天台，混凝土护栏，背景虚化城市灯光",
+          "timeOfDay": "night"
+        },
+        "targetDurationSec": 8
+      }
+    },
+    {
+      "id": "storyspec-invalid-single-too-long",
+      "schema": "StorySpec",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "specId": "spec-0001",
+        "title": "天台交接",
+        "premise": "夜晚城市天台，林夏向陈默递出U盘，陈默迟疑后接过。",
+        "style": "冷色调写实，侧逆光",
+        "mode": "single-shot",
+        "aspect": "9:16",
+        "fps": 24,
+        "characters": [
+          {
+            "roleId": "lin-xia",
+            "name": "林夏",
+            "ageRange": "28岁",
+            "gender": "女",
+            "look": "齐肩短发",
+            "wardrobe": "深灰风衣"
+          },
+          {
+            "roleId": "chen-mo",
+            "name": "陈默",
+            "ageRange": "32岁",
+            "gender": "男",
+            "look": "平头",
+            "wardrobe": "蓝色工装外套"
+          }
+        ],
+        "environment": {
+          "location": "城市天台",
+          "summary": "夜晚天台，混凝土护栏，背景虚化城市灯光",
+          "timeOfDay": "night"
+        },
+        "targetDurationSec": 20
+      }
+    },
+    {
+      "id": "storyspec-invalid-multi-too-short",
+      "schema": "StorySpec",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "specId": "spec-0001",
+        "title": "天台交接",
+        "premise": "夜晚城市天台，林夏向陈默递出U盘，陈默迟疑后接过。",
+        "style": "冷色调写实，侧逆光",
+        "mode": "multi-shot",
+        "aspect": "9:16",
+        "fps": 24,
+        "characters": [
+          {
+            "roleId": "lin-xia",
+            "name": "林夏",
+            "ageRange": "28岁",
+            "gender": "女",
+            "look": "齐肩短发",
+            "wardrobe": "深灰风衣"
+          },
+          {
+            "roleId": "chen-mo",
+            "name": "陈默",
+            "ageRange": "32岁",
+            "gender": "男",
+            "look": "平头",
+            "wardrobe": "蓝色工装外套"
+          }
+        ],
+        "environment": {
+          "location": "城市天台",
+          "summary": "夜晚天台，混凝土护栏，背景虚化城市灯光",
+          "timeOfDay": "night"
+        },
+        "targetDurationSec": 10
+      }
+    },
+    {
+      "id": "storyspec-invalid-too-many-shots",
+      "schema": "StorySpec",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "specId": "spec-0001",
+        "title": "天台交接",
+        "premise": "夜晚城市天台，林夏向陈默递出U盘，陈默迟疑后接过。",
+        "style": "冷色调写实，侧逆光",
+        "mode": "multi-shot",
+        "aspect": "9:16",
+        "fps": 24,
+        "characters": [
+          {
+            "roleId": "lin-xia",
+            "name": "林夏",
+            "ageRange": "28岁",
+            "gender": "女",
+            "look": "齐肩短发",
+            "wardrobe": "深灰风衣"
+          },
+          {
+            "roleId": "chen-mo",
+            "name": "陈默",
+            "ageRange": "32岁",
+            "gender": "男",
+            "look": "平头",
+            "wardrobe": "蓝色工装外套"
+          }
+        ],
+        "environment": {
+          "location": "城市天台",
+          "summary": "夜晚天台，混凝土护栏，背景虚化城市灯光",
+          "timeOfDay": "night"
+        },
+        "targetDurationSec": 30,
+        "requestedShots": 6
+      }
+    },
+    {
+      "id": "storyspec-invalid-aspect",
+      "schema": "StorySpec",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "specId": "spec-0001",
+        "title": "天台交接",
+        "premise": "夜晚城市天台，林夏向陈默递出U盘，陈默迟疑后接过。",
+        "style": "冷色调写实，侧逆光",
+        "mode": "single-shot",
+        "aspect": "4:3",
+        "fps": 24,
+        "characters": [
+          {
+            "roleId": "lin-xia",
+            "name": "林夏",
+            "ageRange": "28岁",
+            "gender": "女",
+            "look": "齐肩短发",
+            "wardrobe": "深灰风衣"
+          },
+          {
+            "roleId": "chen-mo",
+            "name": "陈默",
+            "ageRange": "32岁",
+            "gender": "男",
+            "look": "平头",
+            "wardrobe": "蓝色工装外套"
+          }
+        ],
+        "environment": {
+          "location": "城市天台",
+          "summary": "夜晚天台，混凝土护栏，背景虚化城市灯光",
+          "timeOfDay": "night"
+        },
+        "targetDurationSec": 8
+      }
+    },
+    {
+      "id": "storyspec-invalid-fps",
+      "schema": "StorySpec",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "specId": "spec-0001",
+        "title": "天台交接",
+        "premise": "夜晚城市天台，林夏向陈默递出U盘，陈默迟疑后接过。",
+        "style": "冷色调写实，侧逆光",
+        "mode": "single-shot",
+        "aspect": "9:16",
+        "fps": 30,
+        "characters": [
+          {
+            "roleId": "lin-xia",
+            "name": "林夏",
+            "ageRange": "28岁",
+            "gender": "女",
+            "look": "齐肩短发",
+            "wardrobe": "深灰风衣"
+          },
+          {
+            "roleId": "chen-mo",
+            "name": "陈默",
+            "ageRange": "32岁",
+            "gender": "男",
+            "look": "平头",
+            "wardrobe": "蓝色工装外套"
+          }
+        ],
+        "environment": {
+          "location": "城市天台",
+          "summary": "夜晚天台，混凝土护栏，背景虚化城市灯光",
+          "timeOfDay": "night"
+        },
+        "targetDurationSec": 8
+      }
+    },
+    {
+      "id": "storyspec-invalid-frame-misaligned",
+      "schema": "StorySpec",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "specId": "spec-0001",
+        "title": "天台交接",
+        "premise": "夜晚城市天台，林夏向陈默递出U盘，陈默迟疑后接过。",
+        "style": "冷色调写实，侧逆光",
+        "mode": "single-shot",
+        "aspect": "9:16",
+        "fps": 24,
+        "characters": [
+          {
+            "roleId": "lin-xia",
+            "name": "林夏",
+            "ageRange": "28岁",
+            "gender": "女",
+            "look": "齐肩短发",
+            "wardrobe": "深灰风衣"
+          },
+          {
+            "roleId": "chen-mo",
+            "name": "陈默",
+            "ageRange": "32岁",
+            "gender": "男",
+            "look": "平头",
+            "wardrobe": "蓝色工装外套"
+          }
+        ],
+        "environment": {
+          "location": "城市天台",
+          "summary": "夜晚天台，混凝土护栏，背景虚化城市灯光",
+          "timeOfDay": "night"
+        },
+        "targetDurationSec": 8.05
+      }
+    },
+    {
+      "id": "storyspec-invalid-no-characters",
+      "schema": "StorySpec",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "specId": "spec-0001",
+        "title": "天台交接",
+        "premise": "夜晚城市天台，林夏向陈默递出U盘，陈默迟疑后接过。",
+        "style": "冷色调写实，侧逆光",
+        "mode": "single-shot",
+        "aspect": "9:16",
+        "fps": 24,
+        "characters": [],
+        "environment": {
+          "location": "城市天台",
+          "summary": "夜晚天台，混凝土护栏，背景虚化城市灯光",
+          "timeOfDay": "night"
+        },
+        "targetDurationSec": 8
+      }
+    },
+    {
+      "id": "storyspec-invalid-empty-premise",
+      "schema": "StorySpec",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "specId": "spec-0001",
+        "title": "天台交接",
+        "premise": "",
+        "style": "冷色调写实，侧逆光",
+        "mode": "single-shot",
+        "aspect": "9:16",
+        "fps": 24,
+        "characters": [
+          {
+            "roleId": "lin-xia",
+            "name": "林夏",
+            "ageRange": "28岁",
+            "gender": "女",
+            "look": "齐肩短发",
+            "wardrobe": "深灰风衣"
+          },
+          {
+            "roleId": "chen-mo",
+            "name": "陈默",
+            "ageRange": "32岁",
+            "gender": "男",
+            "look": "平头",
+            "wardrobe": "蓝色工装外套"
+          }
+        ],
+        "environment": {
+          "location": "城市天台",
+          "summary": "夜晚天台，混凝土护栏，背景虚化城市灯光",
+          "timeOfDay": "night"
+        },
+        "targetDurationSec": 8
+      }
+    },
+    {
+      "id": "storyspec-invalid-bad-version",
+      "schema": "StorySpec",
+      "valid": false,
+      "data": {
+        "version": "dsk.v2",
+        "specId": "spec-0001",
+        "title": "天台交接",
+        "premise": "夜晚城市天台，林夏向陈默递出U盘，陈默迟疑后接过。",
+        "style": "冷色调写实，侧逆光",
+        "mode": "single-shot",
+        "aspect": "9:16",
+        "fps": 24,
+        "characters": [
+          {
+            "roleId": "lin-xia",
+            "name": "林夏",
+            "ageRange": "28岁",
+            "gender": "女",
+            "look": "齐肩短发",
+            "wardrobe": "深灰风衣"
+          },
+          {
+            "roleId": "chen-mo",
+            "name": "陈默",
+            "ageRange": "32岁",
+            "gender": "男",
+            "look": "平头",
+            "wardrobe": "蓝色工装外套"
+          }
+        ],
+        "environment": {
+          "location": "城市天台",
+          "summary": "夜晚天台，混凝土护栏，背景虚化城市灯光",
+          "timeOfDay": "night"
+        },
+        "targetDurationSec": 8
+      }
+    },
+    {
+      "id": "shotplan-valid-three-shots",
+      "schema": "ShotPlan",
+      "valid": true,
+      "data": {
+        "version": "dsk.v1",
+        "planId": "plan-0001",
+        "specId": "spec-0002",
+        "specHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "totalDurationSec": 30,
+        "shots": [
+          {
+            "shotId": "shot-01",
+            "suite": "character-enter-exit",
+            "durationSec": 12,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-01_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-01_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "固定机位中景"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "老周从侧门走入停在货架口"
+          },
+          {
+            "shotId": "shot-02",
+            "suite": "tracking-follow",
+            "durationSec": 10,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-02_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-02_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "跟随平移"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "苏晴抱纸箱走向老周"
+          },
+          {
+            "shotId": "shot-03",
+            "suite": "simple-standoff",
+            "durationSec": 8,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-03_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-03_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "缓推正面双人中景"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "苏晴站定放下纸箱，老周抬手示意"
+          }
+        ]
+      }
+    },
+    {
+      "id": "shotplan-valid-single",
+      "schema": "ShotPlan",
+      "valid": true,
+      "data": {
+        "version": "dsk.v1",
+        "planId": "plan-0002",
+        "specId": "spec-0002",
+        "specHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "totalDurationSec": 8,
+        "shots": [
+          {
+            "shotId": "shot-solo",
+            "suite": "two-person-dialogue",
+            "durationSec": 8,
+            "roleIds": [
+              "lin-xia",
+              "chen-mo"
+            ],
+            "roles": [
+              {
+                "roleId": "lin-xia",
+                "entityId": "ent_shot-solo_lin-xia"
+              },
+              {
+                "roleId": "chen-mo",
+                "entityId": "ent_shot-solo_chen-mo"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "过肩中景"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "单镜头交接"
+          }
+        ]
+      }
+    },
+    {
+      "id": "shotplan-invalid-sum-mismatch",
+      "schema": "ShotPlan",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "planId": "plan-0001",
+        "specId": "spec-0002",
+        "specHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "totalDurationSec": 31,
+        "shots": [
+          {
+            "shotId": "shot-01",
+            "suite": "character-enter-exit",
+            "durationSec": 12,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-01_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-01_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "固定机位中景"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "老周从侧门走入停在货架口"
+          },
+          {
+            "shotId": "shot-02",
+            "suite": "tracking-follow",
+            "durationSec": 10,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-02_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-02_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "跟随平移"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "苏晴抱纸箱走向老周"
+          },
+          {
+            "shotId": "shot-03",
+            "suite": "simple-standoff",
+            "durationSec": 8,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-03_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-03_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "缓推正面双人中景"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "苏晴站定放下纸箱，老周抬手示意"
+          }
+        ]
+      }
+    },
+    {
+      "id": "shotplan-invalid-two-shots",
+      "schema": "ShotPlan",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "planId": "plan-0001",
+        "specId": "spec-0002",
+        "specHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "totalDurationSec": 22,
+        "shots": [
+          {
+            "shotId": "shot-01",
+            "suite": "character-enter-exit",
+            "durationSec": 12,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-01_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-01_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "固定机位中景"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "老周从侧门走入停在货架口"
+          },
+          {
+            "shotId": "shot-02",
+            "suite": "tracking-follow",
+            "durationSec": 10,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-02_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-02_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "跟随平移"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "苏晴抱纸箱走向老周"
+          }
+        ]
+      }
+    },
+    {
+      "id": "shotplan-invalid-six-shots",
+      "schema": "ShotPlan",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "planId": "plan-0001",
+        "specId": "spec-0002",
+        "specHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "totalDurationSec": 60,
+        "shots": [
+          {
+            "shotId": "shot-01",
+            "suite": "character-enter-exit",
+            "durationSec": 12,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-01_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-01_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "固定机位中景"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "老周从侧门走入停在货架口"
+          },
+          {
+            "shotId": "shot-02",
+            "suite": "tracking-follow",
+            "durationSec": 10,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-02_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-02_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "跟随平移"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "苏晴抱纸箱走向老周"
+          },
+          {
+            "shotId": "shot-03",
+            "suite": "simple-standoff",
+            "durationSec": 8,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-03_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-03_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "缓推正面双人中景"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "苏晴站定放下纸箱，老周抬手示意"
+          },
+          {
+            "shotId": "shot-04",
+            "suite": "character-enter-exit",
+            "durationSec": 12,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-01_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-01_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "固定机位中景"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "老周从侧门走入停在货架口"
+          },
+          {
+            "shotId": "shot-05",
+            "suite": "tracking-follow",
+            "durationSec": 10,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-02_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-02_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "跟随平移"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "苏晴抱纸箱走向老周"
+          },
+          {
+            "shotId": "shot-06",
+            "suite": "simple-standoff",
+            "durationSec": 8,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-03_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-03_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "缓推正面双人中景"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "苏晴站定放下纸箱，老周抬手示意"
+          }
+        ]
+      }
+    },
+    {
+      "id": "shotplan-invalid-duplicate-shot-id",
+      "schema": "ShotPlan",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "planId": "plan-0001",
+        "specId": "spec-0002",
+        "specHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "totalDurationSec": 30,
+        "shots": [
+          {
+            "shotId": "shot-01",
+            "suite": "character-enter-exit",
+            "durationSec": 12,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-01_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-01_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "固定机位中景"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "老周从侧门走入停在货架口"
+          },
+          {
+            "shotId": "shot-01",
+            "suite": "tracking-follow",
+            "durationSec": 10,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-02_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-02_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "跟随平移"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "苏晴抱纸箱走向老周"
+          }
+        ]
+      }
+    },
+    {
+      "id": "shotplan-invalid-shot-too-long",
+      "schema": "ShotPlan",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "planId": "plan-0001",
+        "specId": "spec-0002",
+        "specHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "totalDurationSec": 38,
+        "shots": [
+          {
+            "shotId": "shot-01",
+            "suite": "character-enter-exit",
+            "durationSec": 20,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-01_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-01_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "固定机位中景"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "老周从侧门走入停在货架口"
+          }
+        ]
+      }
+    },
+    {
+      "id": "shotplan-invalid-suite",
+      "schema": "ShotPlan",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "planId": "plan-0001",
+        "specId": "spec-0002",
+        "specHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "totalDurationSec": 30,
+        "shots": [
+          {
+            "shotId": "shot-01",
+            "suite": "drone-flyby",
+            "durationSec": 12,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-01_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-01_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "固定机位中景"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "老周从侧门走入停在货架口"
+          }
+        ]
+      }
+    },
+    {
+      "id": "shotplan-invalid-duplicate-entity",
+      "schema": "ShotPlan",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "planId": "plan-0001",
+        "specId": "spec-0002",
+        "specHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "totalDurationSec": 30,
+        "shots": [
+          {
+            "shotId": "shot-01",
+            "suite": "character-enter-exit",
+            "durationSec": 12,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_dup"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_dup"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "固定机位中景"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "老周从侧门走入停在货架口"
+          }
+        ]
+      }
+    },
+    {
+      "id": "shotplan-invalid-frame-misaligned",
+      "schema": "ShotPlan",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "planId": "plan-0001",
+        "specId": "spec-0002",
+        "specHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "totalDurationSec": 30.5,
+        "shots": [
+          {
+            "shotId": "shot-01",
+            "suite": "character-enter-exit",
+            "durationSec": 12.5,
+            "roleIds": [
+              "su-qing",
+              "lao-zhou"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-01_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-01_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "固定机位中景"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "老周从侧门走入停在货架口"
+          }
+        ]
+      }
+    },
+    {
+      "id": "shotplan-invalid-role-not-declared",
+      "schema": "ShotPlan",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "planId": "plan-0001",
+        "specId": "spec-0002",
+        "specHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "totalDurationSec": 30,
+        "shots": [
+          {
+            "shotId": "shot-01",
+            "suite": "character-enter-exit",
+            "durationSec": 12,
+            "roleIds": [
+              "su-qing"
+            ],
+            "roles": [
+              {
+                "roleId": "su-qing",
+                "entityId": "ent_shot-01_su-qing"
+              },
+              {
+                "roleId": "lao-zhou",
+                "entityId": "ent_shot-01_lao-zhou"
+              }
+            ],
+            "camera": {
+              "type": "single-continuous",
+              "intent": "固定机位中景"
+            },
+            "fixedElements": [
+              "货架排布"
+            ],
+            "summary": "老周从侧门走入停在货架口"
+          }
+        ]
+      }
+    },
+    {
+      "id": "modelproposal-valid",
+      "schema": "ModelShotProposal",
+      "valid": true,
+      "data": {
+        "version": "dsk.v1",
+        "specId": "spec-0002",
+        "mode": "multi-shot",
+        "shots": [
+          {
+            "shotId": "m-shot-01",
+            "suite": "two-person-dialogue",
+            "durationSec": 8,
+            "roleIds": [
+              "lin-xia",
+              "chen-mo"
+            ],
+            "cameraIntent": "过肩中景缓推",
+            "action": "林夏递出U盘，陈默接过",
+            "summary": "交接瞬间"
+          },
+          {
+            "shotId": "m-shot-02",
+            "suite": "push-orbit",
+            "durationSec": 6,
+            "roleIds": [
+              "chen-mo"
+            ],
+            "cameraIntent": "围绕陈默半环推进",
+            "action": "陈默握紧U盘",
+            "summary": "反应特写"
+          },
+          {
+            "shotId": "m-shot-03",
+            "suite": "simple-standoff",
+            "durationSec": 5,
+            "roleIds": [
+              "lin-xia",
+              "chen-mo"
+            ],
+            "cameraIntent": "正面双人中景",
+            "action": "两人对视收尾"
+          }
+        ],
+        "notes": "语义参数提案，不含任何操作指令"
+      }
+    },
+    {
+      "id": "modelproposal-invalid-carries-operations",
+      "schema": "ModelShotProposal",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "specId": "spec-0002",
+        "mode": "multi-shot",
+        "shots": [
+          {
+            "shotId": "m-shot-01",
+            "suite": "two-person-dialogue",
+            "durationSec": 8,
+            "roleIds": [
+              "lin-xia",
+              "chen-mo"
+            ],
+            "cameraIntent": "过肩中景缓推",
+            "action": "林夏递出U盘，陈默接过",
+            "summary": "交接瞬间"
+          },
+          {
+            "shotId": "m-shot-02",
+            "suite": "push-orbit",
+            "durationSec": 6,
+            "roleIds": [
+              "chen-mo"
+            ],
+            "cameraIntent": "围绕陈默半环推进",
+            "action": "陈默握紧U盘",
+            "summary": "反应特写"
+          },
+          {
+            "shotId": "m-shot-03",
+            "suite": "simple-standoff",
+            "durationSec": 5,
+            "roleIds": [
+              "lin-xia",
+              "chen-mo"
+            ],
+            "cameraIntent": "正面双人中景",
+            "action": "两人对视收尾"
+          }
+        ],
+        "notes": "语义参数提案，不含任何操作指令",
+        "operations": [
+          {
+            "operation": "add",
+            "asset": "furniture-desk"
+          }
+        ]
+      }
+    },
+    {
+      "id": "modelproposal-invalid-carries-entity-id",
+      "schema": "ModelShotProposal",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "specId": "spec-0002",
+        "mode": "multi-shot",
+        "shots": [
+          {
+            "shotId": "m-shot-01",
+            "suite": "two-person-dialogue",
+            "durationSec": 8,
+            "roleIds": [
+              "lin-xia",
+              "chen-mo"
+            ],
+            "cameraIntent": "过肩中景缓推",
+            "action": "林夏递出U盘，陈默接过",
+            "summary": "交接瞬间",
+            "entityId": "ent_smuggled"
+          },
+          {
+            "shotId": "m-shot-02",
+            "suite": "push-orbit",
+            "durationSec": 6,
+            "roleIds": [
+              "chen-mo"
+            ],
+            "cameraIntent": "围绕陈默半环推进",
+            "action": "陈默握紧U盘",
+            "summary": "反应特写",
+            "entityId": "ent_smuggled"
+          },
+          {
+            "shotId": "m-shot-03",
+            "suite": "simple-standoff",
+            "durationSec": 5,
+            "roleIds": [
+              "lin-xia",
+              "chen-mo"
+            ],
+            "cameraIntent": "正面双人中景",
+            "action": "两人对视收尾",
+            "entityId": "ent_smuggled"
+          }
+        ],
+        "notes": "语义参数提案，不含任何操作指令"
+      }
+    },
+    {
+      "id": "modelproposal-invalid-two-shots",
+      "schema": "ModelShotProposal",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "specId": "spec-0002",
+        "mode": "multi-shot",
+        "shots": [
+          {
+            "shotId": "m-shot-01",
+            "suite": "two-person-dialogue",
+            "durationSec": 8,
+            "roleIds": [
+              "lin-xia",
+              "chen-mo"
+            ],
+            "cameraIntent": "过肩中景缓推",
+            "action": "林夏递出U盘，陈默接过",
+            "summary": "交接瞬间"
+          },
+          {
+            "shotId": "m-shot-02",
+            "suite": "push-orbit",
+            "durationSec": 6,
+            "roleIds": [
+              "chen-mo"
+            ],
+            "cameraIntent": "围绕陈默半环推进",
+            "action": "陈默握紧U盘",
+            "summary": "反应特写"
+          }
+        ],
+        "notes": "语义参数提案，不含任何操作指令"
+      }
+    },
+    {
+      "id": "modelproposal-invalid-short-shot",
+      "schema": "ModelShotProposal",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "specId": "spec-0002",
+        "mode": "multi-shot",
+        "shots": [
+          {
+            "shotId": "m-shot-01",
+            "suite": "two-person-dialogue",
+            "durationSec": 4,
+            "roleIds": [
+              "lin-xia",
+              "chen-mo"
+            ],
+            "cameraIntent": "过肩中景缓推",
+            "action": "林夏递出U盘，陈默接过",
+            "summary": "交接瞬间"
+          },
+          {
+            "shotId": "m-shot-02",
+            "suite": "push-orbit",
+            "durationSec": 4,
+            "roleIds": [
+              "chen-mo"
+            ],
+            "cameraIntent": "围绕陈默半环推进",
+            "action": "陈默握紧U盘",
+            "summary": "反应特写"
+          },
+          {
+            "shotId": "m-shot-03",
+            "suite": "simple-standoff",
+            "durationSec": 4,
+            "roleIds": [
+              "lin-xia",
+              "chen-mo"
+            ],
+            "cameraIntent": "正面双人中景",
+            "action": "两人对视收尾"
+          }
+        ],
+        "notes": "语义参数提案，不含任何操作指令"
+      }
+    },
+    {
+      "id": "compiled-valid",
+      "schema": "CompiledShotProposal",
+      "valid": true,
+      "data": {
+        "version": "dsk.v1",
+        "proposalId": "prop-0001",
+        "planId": "plan-0001",
+        "planHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "compiledBy": "deterministic-compiler",
+        "operations": [
+          {
+            "operation": "add",
+            "asset": "furniture-desk",
+            "id": "desk-1",
+            "name": "书桌",
+            "position": [
+              0,
+              0.75,
+              0
+            ]
+          },
+          {
+            "operation": "update",
+            "id": "desk-1",
+            "patch": {
+              "assetParameters": {
+                "width": 1.4
+              }
+            }
+          },
+          {
+            "operation": "camera-motion",
+            "id": "camera-1",
+            "asset": "push",
+            "time": 0,
+            "duration": 6
+          }
+        ],
+        "notes": "由确定性编译器生成的候选操作；DSK-008 之前不编译执行"
+      }
+    },
+    {
+      "id": "compiled-invalid-arbitrary-operation",
+      "schema": "CompiledShotProposal",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "proposalId": "prop-0001",
+        "planId": "plan-0001",
+        "planHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "compiledBy": "deterministic-compiler",
+        "operations": [
+          {
+            "operation": "format-c-drive"
+          }
+        ],
+        "notes": "由确定性编译器生成的候选操作；DSK-008 之前不编译执行"
+      }
+    },
+    {
+      "id": "compiled-invalid-compiled-by-model",
+      "schema": "CompiledShotProposal",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "proposalId": "prop-0001",
+        "planId": "plan-0001",
+        "planHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "compiledBy": "model",
+        "operations": [
+          {
+            "operation": "add",
+            "asset": "furniture-desk",
+            "id": "desk-1",
+            "name": "书桌",
+            "position": [
+              0,
+              0.75,
+              0
+            ]
+          },
+          {
+            "operation": "update",
+            "id": "desk-1",
+            "patch": {
+              "assetParameters": {
+                "width": 1.4
+              }
+            }
+          },
+          {
+            "operation": "camera-motion",
+            "id": "camera-1",
+            "asset": "push",
+            "time": 0,
+            "duration": 6
+          }
+        ],
+        "notes": "由确定性编译器生成的候选操作；DSK-008 之前不编译执行"
+      }
+    },
+    {
+      "id": "compiled-invalid-missing-plan-hash",
+      "schema": "CompiledShotProposal",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "proposalId": "prop-0001",
+        "planId": "plan-0001",
+        "compiledBy": "deterministic-compiler",
+        "operations": [
+          {
+            "operation": "add",
+            "asset": "furniture-desk",
+            "id": "desk-1",
+            "name": "书桌",
+            "position": [
+              0,
+              0.75,
+              0
+            ]
+          },
+          {
+            "operation": "update",
+            "id": "desk-1",
+            "patch": {
+              "assetParameters": {
+                "width": 1.4
+              }
+            }
+          },
+          {
+            "operation": "camera-motion",
+            "id": "camera-1",
+            "asset": "push",
+            "time": 0,
+            "duration": 6
+          }
+        ],
+        "notes": "由确定性编译器生成的候选操作；DSK-008 之前不编译执行"
+      }
+    },
+    {
+      "id": "workflowstate-valid",
+      "schema": "WorkflowState",
+      "valid": true,
+      "data": {
+        "version": "dsk.v1",
+        "workflowId": "wf-0001",
+        "projectId": "proj-0001",
+        "stage": "awaiting-plan-approval",
+        "stepId": "step-plan",
+        "revision": 3,
+        "lastEventSeq": 7,
+        "activeApprovalIds": [
+          "appr-0001"
+        ],
+        "updatedAt": "2026-09-15T09:00:00Z"
+      }
+    },
+    {
+      "id": "workflowstate-invalid-stage",
+      "schema": "WorkflowState",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "workflowId": "wf-0001",
+        "projectId": "proj-0001",
+        "stage": "done",
+        "stepId": "step-plan",
+        "revision": 3,
+        "lastEventSeq": 7,
+        "activeApprovalIds": [
+          "appr-0001"
+        ],
+        "updatedAt": "2026-09-15T09:00:00Z"
+      }
+    },
+    {
+      "id": "workflowstate-invalid-seq",
+      "schema": "WorkflowState",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "workflowId": "wf-0001",
+        "projectId": "proj-0001",
+        "stage": "awaiting-plan-approval",
+        "stepId": "step-plan",
+        "revision": 3,
+        "lastEventSeq": -1,
+        "activeApprovalIds": [
+          "appr-0001"
+        ],
+        "updatedAt": "2026-09-15T09:00:00Z"
+      }
+    },
+    {
+      "id": "workflowstate-invalid-extra-field",
+      "schema": "WorkflowState",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "workflowId": "wf-0001",
+        "projectId": "proj-0001",
+        "stage": "awaiting-plan-approval",
+        "stepId": "step-plan",
+        "revision": 3,
+        "lastEventSeq": 7,
+        "activeApprovalIds": [
+          "appr-0001"
+        ],
+        "updatedAt": "2026-09-15T09:00:00Z",
+        "stageHistory": []
+      }
+    },
+    {
+      "id": "workflowevent-valid",
+      "schema": "WorkflowEvent",
+      "valid": true,
+      "data": {
+        "version": "dsk.v1",
+        "workflowId": "wf-0001",
+        "seq": 8,
+        "type": "approval-requested",
+        "stepId": "step-plan",
+        "requestId": "req-0001",
+        "at": "2026-09-15T09:01:00Z",
+        "summary": "等待计划审批",
+        "payloadHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    },
+    {
+      "id": "workflowevent-invalid-seq-zero",
+      "schema": "WorkflowEvent",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "workflowId": "wf-0001",
+        "seq": 0,
+        "type": "approval-requested",
+        "stepId": "step-plan",
+        "requestId": "req-0001",
+        "at": "2026-09-15T09:01:00Z",
+        "summary": "等待计划审批",
+        "payloadHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    },
+    {
+      "id": "workflowevent-invalid-type",
+      "schema": "WorkflowEvent",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "workflowId": "wf-0001",
+        "seq": 8,
+        "type": "model-said-done",
+        "stepId": "step-plan",
+        "requestId": "req-0001",
+        "at": "2026-09-15T09:01:00Z",
+        "summary": "等待计划审批",
+        "payloadHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    },
+    {
+      "id": "workflowevent-invalid-missing-workflow",
+      "schema": "WorkflowEvent",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "seq": 8,
+        "type": "approval-requested",
+        "stepId": "step-plan",
+        "requestId": "req-0001",
+        "at": "2026-09-15T09:01:00Z",
+        "summary": "等待计划审批",
+        "payloadHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    },
+    {
+      "id": "approval-valid-plan",
+      "schema": "Approval",
+      "valid": true,
+      "data": {
+        "version": "dsk.v1",
+        "approvalId": "appr-0001",
+        "workflowId": "wf-0001",
+        "kind": "plan",
+        "status": "pending",
+        "scopeHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "planHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "budget": {
+          "maxModelRequests": 2,
+          "maxTotalTokens": 100000,
+          "maxWallClockSeconds": 600,
+          "maxShots": 5
+        },
+        "requestedAt": "2026-09-15T09:01:00Z"
+      }
+    },
+    {
+      "id": "approval-invalid-plan-without-hash",
+      "schema": "Approval",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "approvalId": "appr-0001",
+        "workflowId": "wf-0001",
+        "kind": "plan",
+        "status": "pending",
+        "scopeHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "budget": {
+          "maxModelRequests": 2,
+          "maxTotalTokens": 100000,
+          "maxWallClockSeconds": 600,
+          "maxShots": 5
+        },
+        "requestedAt": "2026-09-15T09:01:00Z"
+      }
+    },
+    {
+      "id": "approval-invalid-export-with-plan-hash",
+      "schema": "Approval",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "approvalId": "appr-0001",
+        "workflowId": "wf-0001",
+        "kind": "export",
+        "status": "pending",
+        "scopeHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "planHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "budget": {
+          "maxModelRequests": 2,
+          "maxTotalTokens": 100000,
+          "maxWallClockSeconds": 600,
+          "maxShots": 5
+        },
+        "requestedAt": "2026-09-15T09:01:00Z"
+      }
+    },
+    {
+      "id": "approval-invalid-negative-budget",
+      "schema": "Approval",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "approvalId": "appr-0001",
+        "workflowId": "wf-0001",
+        "kind": "plan",
+        "status": "pending",
+        "scopeHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "planHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "budget": {
+          "maxModelRequests": -1,
+          "maxTotalTokens": 100000,
+          "maxWallClockSeconds": 600,
+          "maxShots": 5
+        },
+        "requestedAt": "2026-09-15T09:01:00Z"
+      }
+    },
+    {
+      "id": "snapshotref-valid",
+      "schema": "SnapshotRef",
+      "valid": true,
+      "data": {
+        "version": "dsk.v1",
+        "snapshotId": "snap-0001",
+        "projectId": "proj-0001",
+        "revision": 5,
+        "digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "createdAt": "2026-09-15T09:02:00Z"
+      }
+    },
+    {
+      "id": "snapshotref-invalid-carries-path",
+      "schema": "SnapshotRef",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "snapshotId": "snap-0001",
+        "projectId": "proj-0001",
+        "revision": 5,
+        "digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "createdAt": "2026-09-15T09:02:00Z",
+        "path": "C:/Users/x/project"
+      }
+    },
+    {
+      "id": "providerrequest-valid",
+      "schema": "ProviderRequest",
+      "valid": true,
+      "data": {
+        "version": "dsk.v1",
+        "requestId": "req-0001",
+        "workflowId": "wf-0001",
+        "stepId": "step-plan",
+        "provider": "mock",
+        "model": "mock-deterministic",
+        "purpose": "plan",
+        "timeoutMs": 30000,
+        "maxOutputTokens": 4096,
+        "inputFingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+        "promptSummary": "单镜头规划请求摘要"
+      }
+    },
+    {
+      "id": "providerrequest-invalid-provider",
+      "schema": "ProviderRequest",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "requestId": "req-0001",
+        "workflowId": "wf-0001",
+        "stepId": "step-plan",
+        "provider": "anthropic",
+        "model": "mock-deterministic",
+        "purpose": "plan",
+        "timeoutMs": 30000,
+        "maxOutputTokens": 4096,
+        "inputFingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+        "promptSummary": "单镜头规划请求摘要"
+      }
+    },
+    {
+      "id": "providerrequest-invalid-timeout",
+      "schema": "ProviderRequest",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "requestId": "req-0001",
+        "workflowId": "wf-0001",
+        "stepId": "step-plan",
+        "provider": "mock",
+        "model": "mock-deterministic",
+        "purpose": "plan",
+        "timeoutMs": 500,
+        "maxOutputTokens": 4096,
+        "inputFingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+        "promptSummary": "单镜头规划请求摘要"
+      }
+    },
+    {
+      "id": "providerrequest-invalid-carries-key",
+      "schema": "ProviderRequest",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "requestId": "req-0001",
+        "workflowId": "wf-0001",
+        "stepId": "step-plan",
+        "provider": "mock",
+        "model": "mock-deterministic",
+        "purpose": "plan",
+        "timeoutMs": 30000,
+        "maxOutputTokens": 4096,
+        "inputFingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+        "promptSummary": "单镜头规划请求摘要",
+        "apiKey": "sk-nope-nope-nope-nope"
+      }
+    },
+    {
+      "id": "providerresponse-valid-ok",
+      "schema": "ProviderResponse",
+      "valid": true,
+      "data": {
+        "version": "dsk.v1",
+        "requestId": "req-0001",
+        "status": "ok",
+        "startedAt": "2026-09-15T09:03:00Z",
+        "finishedAt": "2026-09-15T09:03:01Z",
+        "httpStatus": 200,
+        "content": "{\"shots\":[]}",
+        "usage": {
+          "known": true,
+          "promptTokens": 120,
+          "completionTokens": 80,
+          "totalTokens": 200
+        }
+      }
+    },
+    {
+      "id": "providerresponse-valid-unknown",
+      "schema": "ProviderResponse",
+      "valid": true,
+      "data": {
+        "version": "dsk.v1",
+        "requestId": "req-0002",
+        "status": "unknown",
+        "startedAt": "2026-09-15T09:04:00Z",
+        "errorDetail": "上游连接中断，结果不确定",
+        "usage": {
+          "known": false
+        }
+      }
+    },
+    {
+      "id": "providerresponse-invalid-usage-pretend-zero",
+      "schema": "ProviderResponse",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "requestId": "req-0001",
+        "status": "ok",
+        "startedAt": "2026-09-15T09:03:00Z",
+        "finishedAt": "2026-09-15T09:03:01Z",
+        "httpStatus": 200,
+        "content": "{\"shots\":[]}",
+        "usage": {
+          "known": false,
+          "totalTokens": 0
+        }
+      }
+    },
+    {
+      "id": "providerresponse-invalid-ok-without-content",
+      "schema": "ProviderResponse",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "requestId": "req-0001",
+        "status": "ok",
+        "startedAt": "2026-09-15T09:03:00Z",
+        "finishedAt": "2026-09-15T09:03:01Z",
+        "httpStatus": 200,
+        "usage": {
+          "known": true,
+          "promptTokens": 120,
+          "completionTokens": 80,
+          "totalTokens": 200
+        }
+      }
+    },
+    {
+      "id": "providerresponse-invalid-total-mismatch",
+      "schema": "ProviderResponse",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "requestId": "req-0001",
+        "status": "ok",
+        "startedAt": "2026-09-15T09:03:00Z",
+        "finishedAt": "2026-09-15T09:03:01Z",
+        "httpStatus": 200,
+        "content": "{\"shots\":[]}",
+        "usage": {
+          "known": true,
+          "promptTokens": 120,
+          "completionTokens": 80,
+          "totalTokens": 150
+        }
+      }
+    },
+    {
+      "id": "providerresponse-invalid-unknown-claiming-known",
+      "schema": "ProviderResponse",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "requestId": "req-0003",
+        "status": "unknown",
+        "startedAt": "2026-09-15T09:03:00Z",
+        "finishedAt": "2026-09-15T09:03:01Z",
+        "httpStatus": 200,
+        "usage": {
+          "known": true,
+          "promptTokens": 1,
+          "completionTokens": 1,
+          "totalTokens": 2
+        },
+        "errorDetail": "断流"
+      }
+    },
+    {
+      "id": "providerresponse-invalid-error-without-detail",
+      "schema": "ProviderResponse",
+      "valid": false,
+      "data": {
+        "version": "dsk.v1",
+        "requestId": "req-0001",
+        "status": "error",
+        "startedAt": "2026-09-15T09:03:00Z",
+        "finishedAt": "2026-09-15T09:03:01Z",
+        "httpStatus": 200,
+        "usage": {
+          "known": true,
+          "promptTokens": 120,
+          "completionTokens": 80,
+          "totalTokens": 200
+        }
+      }
+    },
+    {
+      "id": "ipc-not-implemented-state-get",
+      "expectCode": "NOT_IMPLEMENTED",
+      "input": {
+        "version": "dsk.v1",
+        "action": "state.get",
+        "data": {
+          "workflowId": "wf-0001"
+        }
+      }
+    },
+    {
+      "id": "ipc-not-implemented-no-data",
+      "expectCode": "NOT_IMPLEMENTED",
+      "input": {
+        "version": "dsk.v1",
+        "action": "model.status"
+      }
+    },
+    {
+      "id": "ipc-not-implemented-plan-submit",
+      "expectCode": "NOT_IMPLEMENTED",
+      "input": {
+        "version": "dsk.v1",
+        "action": "plan.submit-spec",
+        "data": {
+          "spec": {
+            "version": "dsk.v1",
+            "specId": "spec-0001",
+            "title": "天台交接",
+            "premise": "夜晚城市天台，林夏向陈默递出U盘，陈默迟疑后接过。",
+            "style": "冷色调写实，侧逆光",
+            "mode": "single-shot",
+            "aspect": "9:16",
+            "fps": 24,
+            "characters": [
+              {
+                "roleId": "lin-xia",
+                "name": "林夏",
+                "ageRange": "28岁",
+                "gender": "女",
+                "look": "齐肩短发",
+                "wardrobe": "深灰风衣"
+              },
+              {
+                "roleId": "chen-mo",
+                "name": "陈默",
+                "ageRange": "32岁",
+                "gender": "男",
+                "look": "平头",
+                "wardrobe": "蓝色工装外套"
+              }
+            ],
+            "environment": {
+              "location": "城市天台",
+              "summary": "夜晚天台，混凝土护栏，背景虚化城市灯光",
+              "timeOfDay": "night"
+            },
+            "targetDurationSec": 8
+          }
+        }
+      }
+    },
+    {
+      "id": "ipc-invalid-action",
+      "expectCode": "INVALID_ACTION",
+      "input": {
+        "version": "dsk.v1",
+        "action": "fs.read",
+        "data": {}
+      }
+    },
+    {
+      "id": "ipc-invalid-action-case",
+      "expectCode": "INVALID_ACTION",
+      "input": {
+        "version": "dsk.v1",
+        "action": "State.get",
+        "data": {}
+      }
+    },
+    {
+      "id": "ipc-invalid-action-missing",
+      "expectCode": "INVALID_ACTION",
+      "input": {
+        "version": "dsk.v1",
+        "data": {}
+      }
+    },
+    {
+      "id": "ipc-unknown-version",
+      "expectCode": "UNKNOWN_VERSION",
+      "input": {
+        "version": "dsk.v2",
+        "action": "state.get",
+        "data": {
+          "workflowId": "wf-0001"
+        }
+      }
+    },
+    {
+      "id": "ipc-invalid-envelope-extra-field",
+      "expectCode": "INVALID_PAYLOAD",
+      "input": {
+        "version": "dsk.v1",
+        "action": "state.get",
+        "data": {
+          "workflowId": "wf-0001"
+        },
+        "tool": "director_apply"
+      }
+    },
+    {
+      "id": "ipc-invalid-payload-type",
+      "expectCode": "INVALID_PAYLOAD",
+      "input": {
+        "version": "dsk.v1",
+        "action": "state.get",
+        "data": {
+          "workflowId": 42
+        }
+      }
+    },
+    {
+      "id": "ipc-invalid-spec-payload",
+      "expectCode": "INVALID_PAYLOAD",
+      "input": {
+        "version": "dsk.v1",
+        "action": "plan.submit-spec",
+        "data": {
+          "spec": {
+            "version": "dsk.v1",
+            "specId": "spec-0001",
+            "title": "天台交接",
+            "premise": "",
+            "style": "冷色调写实，侧逆光",
+            "mode": "single-shot",
+            "aspect": "9:16",
+            "fps": 24,
+            "characters": [
+              {
+                "roleId": "lin-xia",
+                "name": "林夏",
+                "ageRange": "28岁",
+                "gender": "女",
+                "look": "齐肩短发",
+                "wardrobe": "深灰风衣"
+              },
+              {
+                "roleId": "chen-mo",
+                "name": "陈默",
+                "ageRange": "32岁",
+                "gender": "男",
+                "look": "平头",
+                "wardrobe": "蓝色工装外套"
+              }
+            ],
+            "environment": {
+              "location": "城市天台",
+              "summary": "夜晚天台，混凝土护栏，背景虚化城市灯光",
+              "timeOfDay": "night"
+            },
+            "targetDurationSec": 8
+          }
+        }
+      }
+    },
+    {
+      "id": "ipc-prototype-key",
+      "expectCode": "INVALID_PAYLOAD",
+      "input": {
+        "version": "dsk.v1",
+        "action": "state.get",
+        "data": {
+          "workflowId": "wf-0001",
+          "__proto__": {
+            "x": 1
+          }
+        }
+      }
+    }
+  ]
+}

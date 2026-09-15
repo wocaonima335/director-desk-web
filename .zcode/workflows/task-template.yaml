@@ -1,0 +1,33 @@
+# 复制为单个任务记录并填写。占位符不能作为 READY 任务执行。
+task_id: DD-000
+title: "待填写"
+status: DRAFT # DRAFT / READY / IMPLEMENTED / REWORK / REPLAN / PASS / BLOCKED
+source_root: "待核实的真实源码绝对路径"
+base_commit: "待核实"
+initial_worktree: "任务开始前 git status 和已有差异的记录位置"
+contract_version: "不适用或已核实版本"
+approval:
+  approved: false
+  reference: "对应的人工计划批准记录，不含私密信息"
+goal: "可观察、可验证的目标"
+context_files: [] # 实际存在的文件路径
+allowed_changes: [] # 明确允许修改或新建的文件/目录
+non_goals:
+  - "不进行无关重构"
+  - "不修改未批准的公共接口、依赖和锁文件"
+acceptance: [] # 每项包含 id、criterion、evidence_required
+verification: [] # 每项包含 command、cwd、expected_result；先从真实项目配置确认
+side_effects_approved: [] # 安装、联网、付费服务等需单独批准
+dependencies: []
+rollback: "撤回本任务变更的方法，不得丢弃原有修改"
+implementation:
+  agent: director-coder
+  changed_files: []
+  checks: [] # command、exit_code、result、evidence
+  blockers: []
+review:
+  agent: director-reviewer
+  verdict: PENDING
+  findings: []
+  unverified: []
+  rework_rounds: 0

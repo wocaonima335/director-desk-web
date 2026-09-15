@@ -1,0 +1,54 @@
+# DSK-001 REWORK R1 最终状态核验
+时间: 2026-09-15T08:43:00Z
+目标 HEAD: 0136ac52780b9a9380c7601d17f6b9bbbc9c20e3（与基线一致，未 commit）
+上游 HEAD: eee9234ae38ffc61a7d4576298a0f23739474597  上游 status 差异行数: 0
+
+分类约定：PROTECTED_STABLE=原有6个工作流文件+4份规划文档，要求与基线一致；AUTHORIZED_MUTABLE=任务列表.md（进度）与 .zcode/workflows/tasks/DSK-001.yaml（任务单）为获准的任务记录更新，仅记录当前值、不作稳定承诺；本核验文件与根 implementation/DSK-001.md 亦为可变记录，不参与任何互相 hash，避免不可完成的自引用。
+
+## 11 项基线文件 sha256 复核
+PROTECTED_STABLE AGENTS.md
+  current_sha256=0265f6f42a9b3fa17c5dcbd1b09f216b535704f59bce9ce81e98ea277aeeb660
+PROTECTED_STABLE plan.md
+  current_sha256=0922ad85a76e2481fbe7a2125000609f32b1f8eabd04eb36102a25daa0a425e7
+AUTHORIZED_MUTABLE 任务列表.md
+  current_sha256=a45d21fb14143570e22841383e51c80b23239fcc8a9c8ec85f402bb212180bb4
+PROTECTED_STABLE 框架设计.md
+  current_sha256=e9b3cf9e9f32375e4dad39454f8e2039733d3c06e95900a7264e5f418ad151ca
+PROTECTED_STABLE 项目评估.md
+  current_sha256=ac0b67d2734528ac67fa631b74d2304980b7a3d833431dd0658c83fc738c82b2
+PROTECTED_STABLE .zcode/agents/director-coder.md
+  current_sha256=63b32b24f82cd20d797337fbdd3b71efb88547ae7cd08eac0694675f663ef4d0
+PROTECTED_STABLE .zcode/agents/director-planner.md
+  current_sha256=52fac7676d66de73ee48263101243052d914c3a7ce6dc665e684dc2b94eb7586
+PROTECTED_STABLE .zcode/agents/director-reviewer.md
+  current_sha256=2defa3ba113515075996262be6ae607558f39c7e823664df1f79accfef416345
+PROTECTED_STABLE .zcode/workflows/README.md
+  current_sha256=8252cf3f6589279adf2d5f1d997bf16f04b4ca075a3882a0e1bae9b2d1a16a55
+PROTECTED_STABLE .zcode/workflows/task-template.yaml
+  current_sha256=be5d84404498647e3a207d68bdc44d27853379b79fc40d8cb78ccef2476925d5
+AUTHORIZED_MUTABLE .zcode/workflows/tasks/DSK-001.yaml
+  current_sha256=3c288b520ef634ffb6aebb6d3d7053cf7d57a4da2f3e80592942dd0623b27549
+
+summary: PROTECTED_STABLE=9 AUTHORIZED_MUTABLE=2 total=11
+
+## 根 implementation/ 例外生效验证
+git check-ignore implementation/DSK-001.md -> 未被忽略（退出码 1，预期）
+目标 status 未跟踪顶层条目：
+?? .gitignore
+?? .zcode/
+?? AGENTS.md
+?? LICENSE
+?? README.md
+?? desktop/
+?? docs/
+?? index.html
+?? package-lock.json
+?? package.json
+?? public/
+?? scripts/
+?? skills/
+?? src/
+?? tests/
+?? tsconfig.json
+
+环境: Node v22.14.0, npm 10.9.2, Windows 10.0.19045 x64, git 2.47.1.windows.1

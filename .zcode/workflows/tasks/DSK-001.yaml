@@ -1,0 +1,99 @@
+task_id: DSK-001
+title: "源码快照迁入与隔离桌面基线"
+status: PASS # 独立复审通过；仅开发基线技术审查，人工/Windows11/安装包未验收
+source_root: "E:/myProgram/DirectorDesk/director-desk-web"
+base_commit: "0136ac52780b9a9380c7601d17f6b9bbbc9c20e3"
+initial_worktree: "Explore 已核实：仅 AGENTS.md、.zcode/agents/director-coder.md、director-planner.md、director-reviewer.md、.zcode/workflows/README.md、task-template.yaml 六个未跟踪文件；无 tracked 差异。主会话新增本任务单。编码前复验并保存保护文件 hash 与完整状态。"
+contract_version: "不适用；保持上游工程格式"
+approval:
+  approved: true
+  reference: "本会话 ExitPlanMode 明确获批：第一阶段至 DSK-008（含）及必需 DSK-016；本任务为串行第一项。"
+goal: "将上游固定提交可追溯导入目标，补齐开发数据隔离并实测构建、测试和桌面启动。"
+context_files:
+  - "E:/myProgram/DirectorDesk/director-desk-web/AGENTS.md"
+  - "E:/myProgram/DirectorDesk/director-desk-web/.zcode/workflows/README.md"
+  - "E:/myProgram/DirectorDesk/director-desk-web/任务列表.md"
+  - "E:/myProgram/DirectorDesk/director-desk/package.json"
+  - "E:/myProgram/DirectorDesk/director-desk/scripts/desktop-dev.mjs"
+  - "E:/myProgram/DirectorDesk/director-desk/desktop/main.cjs"
+  - "E:/myProgram/DirectorDesk/director-desk/desktop/files.cjs"
+  - "E:/myProgram/DirectorDesk/director-desk/desktop/update-host.cjs"
+allowed_changes:
+  - "从 E:/myProgram/DirectorDesk/director-desk 提交 eee9234ae38ffc61a7d4576298a0f23739474597 导入 tracked 源码、资源、脚本、测试、锁文件和许可；不含 .git、本地数据，不覆盖目标规划文档及原有六个未跟踪文件，冲突先停下。"
+  - "目标 scripts/desktop-dev.mjs、desktop/main.cjs、desktop/files.cjs 及必要开发更新入口、ignore、对应测试的隔离修正。"
+  - "本任务单实施记录、源码来源清单、implementation/DSK-001.md（仅完成时）、任务列表中本任务进度。"
+non_goals:
+  - "不修改上游、代理配置或原有工作流文件，不 commit/push。"
+  - "不新增依赖、不升级 Electron/技术栈、不初始化 Trellis，不使用真实付费服务。"
+  - "不实施 DSK-002 及后续业务功能；不将历史 WEB 计划作为有效路线。"
+acceptance:
+  - id: A1
+    criterion: "来源 SHA、导入清单和许可可核对，初始保护文件 hash 不变，上游仍干净。"
+    evidence_required: "导入清单、迁入前后 git status 和保护 hash。"
+  - id: A2
+    criterion: "开发 profile、默认 Projects/Exports 和会话数据与上游默认目录隔离；更新检查/下载被禁止。"
+    evidence_required: "代码差异、自动测试和实际开发启动路径记录。"
+  - id: A3
+    criterion: "锁定依赖安装、完整测试、构建、准备和桌面启动真实成功。"
+    evidence_required: "各命令退出码和日志、实际 Electron 窗口/运行证据；人工和 Windows11 未验收项另列。"
+verification:
+  - command: "npm ci"
+    cwd: "E:/myProgram/DirectorDesk/director-desk-web"
+    expected_result: "锁定依赖安装成功；不更改依赖版本。"
+  - command: "npm test"
+    cwd: "E:/myProgram/DirectorDesk/director-desk-web"
+    expected_result: "完整测试成功。"
+  - command: "npm run build"
+    cwd: "E:/myProgram/DirectorDesk/director-desk-web"
+    expected_result: "类型、Vite、技能和隐私检查成功。"
+  - command: "npm run desktop:prepare"
+    cwd: "E:/myProgram/DirectorDesk/director-desk-web"
+    expected_result: "实际准备桌面产物；先核实 Chrome 路径。"
+  - command: "npm run desktop:start"
+    cwd: "E:/myProgram/DirectorDesk/director-desk-web"
+    expected_result: "隔离环境中真实启动 Electron，记录实际结果并仅关闭本任务进程。"
+side_effects_approved:
+  - "npm ci 联网及锁定安装脚本；本地 Chrome/Electron 和回环测试服务。"
+  - "目标隔离开发/测试数据、.audit/desktop-app、图标和许可清单等构建产物。"
+dependencies: []
+rollback: "按任务前状态与导入清单仅撤回本任务增量；不得 reset/clean 或覆盖已有文件。"
+implementation:
+  agent: director-coder
+  changed_files:
+    - ".gitignore（追加目标仓库规划/工作流例外，其余与上游逐字节一致）"
+    - "desktop/file-host.cjs（新增并导出纯函数 defaultFileLocations；无 Electron 依赖）"
+    - "desktop/files.cjs（开发版 Projects/Exports 默认目录改为隔离 profile 内；打包版行为不变）"
+    - "tests/file-host.test.cjs（新增隔离回归测试）"
+    - "新增记录：.zcode/workflows/implementation/DSK-001.md、DSK-001-baseline.txt、DSK-001-import-manifest.txt、DSK-001-changes.diff、DSK-001-postcheck.txt"
+  checks:
+    - "git archive 快照导入 548 条；REWORK R1 最终复测：542 逐字节相同、2 仅换行差异（skills/director-desk/scripts/project-tool.mjs、src/automation/builtin-skill.json）、4 内容差异（.gitignore 为计划内例外追加，file-host.cjs/files.cjs/file-host.test.cjs 为本任务隔离修正）；上游 status 迁移前后均 0 差异（证据 .zcode/workflows/implementation/DSK-001-rework1-import-verify.txt）"
+    - "保护文件：postcheck 时点 11 项 sha256 一致（DSK-001-postcheck.txt）属实；REWORK R1 终验 9 项与基线一致，任务列表.md 与本任务单为授权进度/任务记录更新（.zcode/workflows/implementation/DSK-001-rework1-final-verify.txt）；Trellis 两仓库均不存在，仅记录"
+    - "npm ci 退出码 0：389 包锁定安装，Electron 44.2.0（npm-ci.log 含 EXIT_CODE=0，未重跑）"
+    - "npm test 退出码 0：417/417 通过（REWORK R1 复跑 EXIT_CODE=0；'首跑 18 项失败、补测试资产后全绿'为第一轮编码代理报告，原始日志未保留、未经独立复核；测试资产准备命令、Kenney zip 解压布局与固定来源/hash 清单见根 implementation/DSK-001.md）"
+    - "npm run build 退出码 0：tsc/Vite/技能构建/隐私检查通过（REWORK R1 复跑 EXIT_CODE=0，日志含时间戳）"
+    - "npm run desktop:prepare 退出码 0（Chrome 路径先核实；REWORK R1 复跑 EXIT_CODE=0）；.audit/desktop-app 产物齐备"
+    - "npm run desktop:start 真实启动：CDP 实测 renderer 加载（.application-menu 存在；字段由 windowShown 更名 rendererLoaded，不证明原生窗口人眼可见），locations 落在 .local/desktop-dev-profile/DirectorDesk/{Projects,Exports}，开发模式 update('check') 被拒且 canDownload=false；taskkill 仅关闭本任务进程树，无残留 electron 进程（REWORK R1 复跑 EXIT_CODE=0）"
+  blockers: []
+review:
+  agent: director-reviewer
+  verdict: PASS
+  final_review_reference: "director-reviewer agent_7ade6c29-2cd8-4873-8e5e-2de7f776fe69 第2轮：R1/R2/R3关闭，可推进002；desktop启动0为CDP取证包装器退出码，不证明Electron自然退出。"
+  findings:
+    - "R1: 第一轮报告'其余 544 来源字节一致'与'11 项保护 hash 一致'不准确；review 实测 548=542 相同+2 仅换行+4 内容差异；11 项基线 hash 为 9 项不变+2 项授权更新（任务列表.md、DSK-001 任务单）。"
+    - "R2: build/prepare 日志缺可独立核验的进程退出码；launch-verify 的 windowShown 实为 renderer .application-menu 存在性；首次 18 项测试失败原始日志未保留。"
+    - "R3: 批准约定根 implementation/DSK-001.md 不存在且被 ignore。"
+  rework_rounds: 1
+  rework_round_1:
+    agent: director-coder
+    status: IMPLEMENTED（待第2轮独立复审）
+    fixes:
+      - "R1: 追加时点清晰的最终核验 DSK-001-rework1-import-verify.txt（548 条逐文件 cmp 分类复测）与 DSK-001-rework1-final-verify.txt（保护 hash 分类+双仓库状态）；按实际统计不硬写预期，不回改文件凑 hash。"
+      - "R2: 重跑 npm test / npm run build / npm run desktop:prepare / desktop:start 取证，日志含命令、UTC 时间戳、EXIT_CODE（Git Bash pipefail+PIPESTATUS，tmp/dsk-001-logs/rework-1/）；未重跑 npm ci；'首次 18 失败'降级为前次编码代理报告、未独立复核；launch-verify.mjs windowShown 更名 rendererLoaded 并注明仅证明 renderer 加载。"
+      - "R3: 新增根 implementation/DSK-001.md 可追踪实施报告/索引，.gitignore 追加最小例外 !/implementation/，旧证据原样保留，未改原 workflow 文件。"
+    remaining_unverified:
+      - "人工真机 Electron 窗口交互走查（CDP 仅证实 renderer 加载）"
+      - "Windows 11 行为"
+      - "打包安装版行为"
+  unverified:
+    - "人工真机窗口交互走查（代理经 CDP 证实 renderer 加载，未做人眼 UI 走查，未证原生窗口可见）"
+    - "Windows 11 与打包安装版行为（non-goal，一期后续）"

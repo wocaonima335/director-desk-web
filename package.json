@@ -1,0 +1,47 @@
+{
+  "name": "director-desk",
+  "version": "0.4.8",
+  "shortVersion": "0.4.8",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "predev": "node scripts/build-builtin-skill.mjs",
+    "prebuild": "node scripts/build-builtin-skill.mjs",
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "postbuild": "node scripts/build-offline-skill.mjs && node scripts/check-release-privacy.mjs",
+    "check:privacy": "node scripts/check-release-privacy.mjs",
+    "desktop:prepare": "node scripts/prepare-desktop.mjs",
+    "predesktop:prepare": "npm run build",
+    "predesktop:dev": "npm run desktop:prepare",
+    "desktop:dev": "node scripts/desktop-dev.mjs",
+    "desktop:start": "node scripts/desktop-dev.mjs",
+    "desktop:pack": "electron-builder --config desktop/builder.cjs --win --x64 --publish never",
+    "predesktop:pack": "npm run desktop:prepare",
+    "desktop:pack:mac": "electron-builder --config desktop/builder.cjs --mac --arm64 --publish never",
+    "predesktop:pack:mac": "npm run desktop:prepare",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "node --experimental-strip-types --test tests/*.test.ts tests/*.test.cjs",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "mediabunny": "1.55.7",
+    "three": "0.185.1"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@types/node": "26.4.1",
+    "@types/three": "0.185.4",
+    "electron": "44.2.0",
+    "electron-builder": "26.15.3",
+    "electron-updater": "^6.8.9",
+    "esbuild": "0.28.2",
+    "js-yaml": "4.3.2",
+    "playwright-core": "1.63.0",
+    "semver": "7.8.5",
+    "typescript": "5.9.3",
+    "vite": "8.2.2",
+    "zod": "4.5.4"
+  }
+}
