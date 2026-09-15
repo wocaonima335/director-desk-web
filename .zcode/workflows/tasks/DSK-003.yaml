@@ -1,6 +1,6 @@
 task_id: DSK-003
 title: "IPC 与流水线共享契约 dsk.v1"
-status: IMPLEMENTED # 003编码完成，待director-reviewer独立审查；不表示已验收/提交/发布
+status: PASS # 两轮返工后独立技术复审通过；允许按原计划进入004 SQLite门禁，人工验收未完成
 source_root: "E:/myProgram/DirectorDesk/director-desk-web"
 base_commit: "0136ac52780b9a9380c7601d17f6b9bbbc9c20e3"
 initial_worktree: "继承已批准001/002增量和主会话新增003任务单；执行前记录完整git状态和本任务将触及文件的hash及备份引用，不能假设未跟踪文件都是本任务新增。"
@@ -92,9 +92,23 @@ implementation:
   blockers: []
 review:
   agent: director-reviewer
-  verdict: PENDING
+  verdict: PASS
+  reference: "agent_eebea5ee-801a-4005-ad3c-7ed7b08c25c0 第二轮独立复审PASS；独立npm test428/0/0、tsc0、最终hash全部匹配；生产未漂移，继承第一轮已核验build/prepare/真实Electron回环。当前根E:/director-desk/director-desk-web，HEAD8b09b43；上方旧路径/基线为历史实施记录。"
   findings: []
+  closed_findings_history:
+    - "R1: isTrustedDskFrame 未比较真实 webContents.mainFrame 身份；同URL不同frame未覆盖。"
+    - "R2: ShotPlan 接受重复 roleIds。"
+    - "R3: StorySpec 指定镜头数与目标时长可形成不满足每镜头5-15秒的无解组合。"
+    - "R4: Budget.maxModelRequests 允许50，超过已批准全流程17次上限。"
+    - "R5: 模型请求登记/响应事件可缺少requestId与stepId。"
+    - "R6: 部分fixture被无关错误掩盖；12.5秒并非帧错位；补齐4/5镜头及11动作正反覆盖。历史69例实际58 schema+11 IPC。"
+    - "R7: 最终源码的npm test/build/desktop:prepare及prepared Electron回环需本机复现；历史日志不等于本机证据。"
+    - "N1: 源revision/hash/scope绑定语义待澄清，不授权新增破坏性契约字段；N2: 建议preload实际发送版本自动断言。"
   unverified:
     - "人工 Electron 窗口走查、Windows 11 x64、真实供应商兼容性：本轮未做，保留为独立人工验收项"
-    - "npm ci 未重跑（复用 DSK-001 已装依赖与锁定版本，本轮无新增依赖）"
-  rework_rounds: 0
+    - "N1：源revision/hash/scope完整可信关联及失效方案仍未实现，保留008前契约门禁，必要变更须重新批准。"
+    - "同URL异frame拒绝由对象mock证明，不声称实际Electron子frame攻击验证。"
+  rework_rounds: 2
+  final_checks:
+    - "reviewer独立npm test EXIT0，428通过/0失败/0跳过；tsc EXIT0；151fixture(122schema+29IPC)通过。"
+    - "prepared integration SHA256 696284ad06e50e0c4e50cff81263364de3097c3c6c1d499fce387faf462a9281；本轮未重复build/prepare/回环，继承已核验且输入未漂移证据。"

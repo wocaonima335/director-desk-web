@@ -1,0 +1,81 @@
+task_id: DSK-003
+subtask: rework-2
+title: "DSK-003 第二轮返工：仅清除R6反例夹带错误"
+status: PASS # 主会话按第二轮独立复审同步，未改已审业务源码
+source_root: "E:/director-desk/director-desk-web"
+base_commit: "8b09b43c1fb03c8a42d98cd2e50b64db5486a98e"
+initial_worktree: "继承rework-1全部修改与主会话状态更新、provider修正；写前另存快照，不覆盖第一轮证据。"
+contract_version: dsk.v1
+approval:
+  approved: true
+  reference: "沿用已批准003和rework-1范围；reviewer独立复审明确仅剩fixture与证据表述，未扩大业务范围。"
+goal: "关闭R6剩余七例的无关校验错误，准确说明关联约束和最终快照时点。"
+context_files:
+  - .zcode/workflows/tasks/DSK-003-rework-1.yaml
+  - implementation/DSK-003.md
+  - tests/fixtures/dsk-contracts/cases.json
+  - tests/dsk-contracts.test.ts
+  - tests/dsk-contracts.test.cjs
+allowed_changes:
+  - tests/fixtures/dsk-contracts/cases.json
+  - "tests/dsk-contracts.test.ts：仅补R6剩余反例无额外issue的断言，不削弱已有断言"
+  - "tests/dsk-contracts.test.cjs：同上"
+  - implementation/DSK-003.md
+  - .zcode/workflows/tasks/DSK-003.yaml
+  - .zcode/workflows/tasks/DSK-003-rework-1.yaml
+  - .zcode/workflows/tasks/DSK-003-rework-2.yaml
+  - "任务列表.md：仅003状态"
+  - "tmp/dsk-003-rework-2*：本轮独立备份、日志、最终快照"
+non_goals:
+  - "不改任何生产源码/依赖/契约；R1-R5,N2已关闭，不重复实施"
+  - "不覆盖第一轮或环境恢复证据；保留所有已有provider及主会话修改"
+  - "不进入004，不改相邻仓库，不提交推送"
+acceptance:
+  - id: R6-remaining
+    criterion: "七例仅破坏目标约束，保留目标issue断言。"
+    evidence_required: "storyspec-invalid-multi-requestedshots-2用20秒避免额外时长窗口错误；plan-invalid-two-shots、plan-invalid-total-not-sum及两类modelproposal two-shots各镜头shotId唯一；unknown-content用usage known:false；unknown-known-usage删除content。逐例输出实际issues验证只有预期错误。"
+  - id: E1
+    criterion: "准确表述单因素覆盖及快照时点，不笼统宣称全部反例都只有一个issue。"
+    evidence_required: "说明空镜头等自然关联错误；第一轮post-state在最终文档更新前生成，业务hash有效。新增最终文档更新后的快照，不覆盖旧记录。"
+  - id: V
+    criterion: "两端151fixture和全量测试/类型检查通过；生产源码与prepared产物未漂移。"
+    evidence_required: "npm test、node node_modules/typescript/bin/tsc --noEmit退出码和日志；七例实际issue探针；若生产源码/构建输入均未变，继承rework-1 build/prepare/回环经reviewer核实证据，明确本轮未重复运行，不冒称新运行。"
+verification:
+  - command: npm test
+    cwd: "E:/director-desk/director-desk-web"
+    expected_result: "全量通过，无跳过"
+  - command: "node node_modules/typescript/bin/tsc --noEmit"
+    cwd: "E:/director-desk/director-desk-web"
+    expected_result: "类型检查通过"
+side_effects_approved:
+  - "仅既有本地测试与隔离证据写入，无新增安装/网络"
+dependencies:
+  - "rework-1独立复审REWORK：R1-R5/N2/R7已关闭，仅R6残留"
+rollback: "仅按本轮备份撤回本轮fixture/文档增量，不reset/clean。"
+implementation:
+  agent: director-coder
+  changed_files:
+    - "tests/fixtures/dsk-contracts/cases.json（仅七例修正：requestedshots-2 总长20、两 shot 计划/提案与 total-not-sum 的 shotId 唯一化、unknown 两例拆分为 content-only 与 usage-only；七例加 expectIssueCount=1；provenance 注明 rework-2 补丁）"
+    - "tests/dsk-contracts.test.ts（仅新增 expectIssueCount 断言与七例探针测试，未削弱已有断言）"
+    - "tests/dsk-contracts.test.cjs（同上）"
+    - "implementation/DSK-003.md（返工第 2 轮章节：七例对照表、E1 准确表述与快照时点、V 验证；rework-1 章节 R6 行加表述修正标注）"
+    - ".zcode/workflows/tasks/DSK-003.yaml（仅 status 行）"
+    - "任务列表.md（仅 003 状态两处）"
+    - "tmp/dsk-003-rework-2-*（pre-state、backup、patch 脚本、issue 计数普查、drift check、npm-test/tsc 日志、final-state）"
+  checks:
+    - "七例探针：两端 harness 各 7 条输出，逐例恰 1 条目标 issue，路径/消息与任务单预期一致"
+    - "npm test → EXIT=0（428/0/0）；日志 tmp/dsk-003-rework-2-npm-test.log"
+    - "node node_modules/typescript/bin/tsc --noEmit → EXIT=0；日志 tmp/dsk-003-rework-2-tsc.log"
+    - "E1 普查：94 invalid schema 例 = 90×1 issue + 4 例自然联动（shotid-duplicate 两 shot、shots-empty 级联、两个均缺设计性双断言）；tmp/dsk-003-rework-2-issue-count-survey.log"
+    - "生产零漂移：shared/contracts 5 文件、desktop/integration.cjs、preload.cjs 与 .audit staged bundle 哈希本轮前后逐一相同；明确继承 rework-1 已核验 build/prepare/回环证据，本轮未重复运行"
+  blockers: []
+review:
+  agent: director-reviewer
+  verdict: PASS
+  reference: "agent_eebea5ee-801a-4005-ad3c-7ed7b08c25c0 第二轮独立终审：R6-remaining/E1/V关闭；npm test428/0/0、tsc0、151fixture、全部hash匹配。状态同步发生在已核验final-state之后，不覆盖历史快照。"
+  findings: []
+  unverified:
+    - "人工 Electron 窗口走查、Windows 11 x64、真实供应商兼容性：维持未验收原状"
+    - "本轮未重复 build/prepare/Electron 回环（生产输入零漂移，继承 rework-1 复审核实证据）"
+  rework_rounds: 2
+  escalation: "本轮若仍REWORK，转planner重规划，不再直接交第三轮返工。"

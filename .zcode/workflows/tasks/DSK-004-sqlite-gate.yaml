@@ -1,0 +1,89 @@
+task_id: DSK-004
+subtask: sqlite-compatibility-gate
+title: "锁定Electron真实主进程内置node:sqlite兼容性门禁"
+status: REWORK # 已暂停保存远程；SQ1-SQ4关闭，仅SQ5/G8待补；第二轮脚本已写未运行，不放行项目库
+source_root: "E:/director-desk/director-desk-web"
+base_commit: "8b09b43c1fb03c8a42d98cd2e50b64db5486a98e"
+initial_worktree: "继承003两轮返工、provider修正和主会话PASS状态同步；运行前记录实际Git状态与prepared完整文件hash，不覆盖已有改动。"
+contract_version: "不新增公共契约或产品SQLite schema"
+approval:
+  approved: true
+  reference: "既有批准计划004首项及用户明确先验证Electron node:sqlite；planner agent_c5d20fe3-e0d3-4637-b4e0-00d82a631d10 PLAN_READY。"
+goal: "先证明Electron44.2.0真实browser主进程及未修改prepared应用内node:sqlite可用，再决定项目库实施。"
+context_files:
+  - .zcode/plans/plan-sess_eb0067fe-a560-495d-9531-9beb2e0d04fe.md
+  - scripts/prepare-desktop.mjs
+  - desktop/main.cjs
+  - scripts/desktop-dev.mjs
+  - scripts/test-dsk-contracts-desktop.mjs
+  - package.json
+  - package-lock.json
+  - desktop/builder.cjs
+allowed_changes:
+  - "tmp/dsk-004-sqlite-gate/<唯一run-id>/：run.mjs、main.cjs、contender.cjs、结果/日志/基线/运行后证据、data/测试DB及profiles/"
+non_goals:
+  - "不改任何生产/共享/依赖/锁/构建/prepared文件、既有脚本、任务单或报告"
+  - "不实现项目库/写入租约/快照/迁移，不代表004完成或ASAR/安装包验证"
+  - "不新增驱动，不以JSON降级，不以系统Node或ELECTRON_RUN_AS_NODE冒充Electron主进程"
+  - "不重复迁入源码，不改相邻仓库，不提交推送，不访问真实业务资源"
+acceptance:
+  - id: G1
+    criterion: "锁文件/安装包/实际Electron均44.2.0；真实process.type=browser、app.whenReady；移除ELECTRON_RUN_AS_NODE。"
+    evidence_required: "记录exe、PID、process.versions(node/chrome/electron/sqlite)、平台、运行路径和断言。"
+  - id: G2
+    criterion: "临时Electron包装入口先隔离profile、app.setAppPath指向现有.audit/desktop-app，然后加载其未经改动desktop/main.cjs；实际director://app/加载成功。"
+    evidence_required: "app.getAppPath、实际入口、页面加载与SQLite在同一真实主进程的证据；明确有包装，不仅cwd。"
+  - id: G3
+    criterion: "内置node:sqlite真实文件数据库建测试表，参数化写读。"
+    evidence_required: "DB绝对路径、sqlite_version查询、精确行数/值，不用memory替代。"
+  - id: G4
+    criterion: "提交保留，rollback的新增及修改均未保留。"
+    evidence_required: "每步值与行数断言。"
+  - id: G5
+    criterion: "关闭连接重开及新启动真实Electron进程均确认持久化。"
+    evidence_required: "已提交保留、已回滚不存在，新PID与真实退出码。"
+  - id: G6
+    criterion: "journal_mode返回wal；有限busy timeout、明确synchronous，连接间未提交不可见提交后可见，checkpoint成功。"
+    evidence_required: "实际PRAGMA值、精确数据、checkpoint返回状态；不声称断电持久性。"
+  - id: G7
+    criterion: "A持有BEGIN IMMEDIATE时独立真实Electron进程B尝试写入得锁忙且无部分写入；释放后B受控重试成功。"
+    evidence_required: "进程同步信号，不仅sleep；错误码/消息/时间/有限timeout和最终数据。不是产品项目租约实现。"
+  - id: G8
+    criterion: "所有数据profile限唯一run目录；有界超时与子进程回收；prepared全部文件无新增删除修改，源码差异不扩大。"
+    evidence_required: "完整前后hash与Git状态、结果JSON/原日志/正常实际退出码；强杀不可算通过。"
+verification:
+  - command: "node tmp/dsk-004-sqlite-gate/<实际run-id>/run.mjs"
+    cwd: "E:/director-desk/director-desk-web"
+    expected_result: "G1-G8全部实测通过，系统Node只编排，不执行SQLite验收"
+side_effects_approved:
+  - "既有授权隔离Electron启动与tmp测试文件，无网络/安装/真实数据。"
+dependencies:
+  - "DSK-003第二轮独立技术PASS"
+  - "锁定Electron及当前prepared存在，缺失或损坏则报BLOCKED，不能自行覆盖修复"
+rollback: "仅结束本轮自建进程并关闭连接，保留失败证据，不清理其他数据。"
+implementation:
+  agent: director-coder
+  changed_files: []
+  checks: []
+  blockers: []
+review:
+  agent: director-reviewer
+  verdict: REWORK
+  reference: "agent_eebea5ee-801a-4005-ad3c-7ed7b08c25c0；实审tmp/dsk-004-sqlite-gate/20260915T174217-pid341。G1/G3/G4/G6/G7成立，G2/G5/G8有缺口。"
+  findings:
+    - "SQ1: 并发进程B不是A/B退出后启动的重开验证；须A/B退出0后启动C只读验证完整数据。"
+    - "SQ2: URL导航不是加载完成；导航前监听did-finish-load并拒绝主frame did-fail-load，验证精确URL。"
+    - "SQ3: ready前隔离并记录A/B/C userData/sessionData/logs/crashDumps等相关写入路径，规范化边界判断；记录实际Projects/Exports。"
+    - "SQ4: 原run.mjs重跑清空证据；新唯一目录保留旧目录，拒绝重跑或每次新attempt目录。此前失败证据已被重置，不能补造。"
+  unverified:
+    - "004项目库/写入租约/快照/迁移/ASAR/安装包未实施或验证。"
+  rework_rounds: 2
+  latest_review: "第一轮返工复审：SQ1-SQ4及G1-G7通过，仅SQ5 Git porcelain正则错误漏掉动态已改文件保护清单，G8尚未通过。"
+  remaining:
+    - "SQ5: 新唯一attempt用可靠NUL路径枚举与覆盖断言，中文/未跟踪/删除/重命名明确处理，不静默丢弃；完整前后hash含provider/测试/文档/任务单。"
+    - "非阻断加固：reopen只读失败直接失败，不回退普通打开；正确记录sq1.verifiedAt。"
+  escalation: "第二轮返工若仍不通过，转planner重规划，不直接第三轮。"
+rework_scope:
+  - "仅新tmp/dsk-004-sqlite-gate/<唯一run-id>/下探针及其独立attempt目录；可增加reopen.cjs。旧run目录原样保留。"
+  - "修复SQ1-SQ4，完整G1-G8重跑，新增生产源码与已修改文件内容hash保护，不只比较git status。"
+  - "任何失败attempt保留；输出真实退出码/事件/PID/路径/结果与日志；生产与prepared不修改。"

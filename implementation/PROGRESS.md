@@ -2,7 +2,18 @@
 
 记录日期：2026-09-15。
 
-## 当前结论
+## 当前续接状态（2026-09-16）
+
+- 已在 `checkpoint/dsk-003-progress` / `8b09b43c1fb03c8a42d98cd2e50b64db5486a98e` 续接，真实根目录为 `E:/director-desk/director-desk-web`；未重复迁入源码。
+- 三个 `director-*` 代理均已实际调用并读取文件；精确后台模型路由仍未验证。既有 planner/reviewer provider 修正保留。
+- DSK-003 独立静态审查返回 **REWORK**（`agent_eebea5ee-801a-4005-ad3c-7ed7b08c25c0`）：主 frame 身份、重复角色、镜头数/时长可实现性、预算上限、模型事件关联及 fixture 质量需返工，详见任务单 R1—R7。
+- 锁定验证环境已恢复：本机 Node `v26.4.0`、npm `11.17.0`，`npm ci` 389 包，按既有授权补运行锁定 Electron 安装脚本，Electron `44.2.0`。原状态 `npm test` 423/0/0、build、prepare、桌面回环均退出 0，日志在 `artifacts/tmp/dsk-003-resume/`。这些结果复现了原测试，但不能否定独立审查已运行复现的 R1—R5。
+- 第一轮返工 coder 已返回 IMPLEMENTED，任务单为 `.zcode/workflows/tasks/DSK-003-rework-1.yaml`；报告最终 `npm test` 426/0/0、build、prepare、新产物 Electron 回环均退出 0，证据在 `tmp/dsk-003-rework-1-*`。首轮 build/prepare 类型错误及旧产物回环无效证据已单列保留。
+- 独立复审曾因 API TLS 建连中断失败；同一 reviewer/配置有界重试成功，第一轮复审只剩R6测试数据残留。第二轮窄范围修正后，**DSK-003 独立技术终审 PASS**：reviewer实测428/0/0、tsc EXIT0、151fixture通过，最终hash全部匹配。N1继续保留008前门禁；provider、依赖清单、AGENTS保护指纹与初始一致。
+- **已按负责人最新要求暂停并保存远程检查点**，最新汇总见根目录 [进度.md](../进度.md)。DSK-004 内置 SQLite 能力已在真实 Electron/prepared 实测；独立审查认可 G1—G7，但 G8/SQ5 文件保护枚举证据有缺口，门禁仍 REWORK。第二轮修复在 `tmp/dsk-004-sqlite-gate/20260915T180721-rework2-pid956/` 已写未执行，不继续启动实验。004 项目库、不可变快照等生产功能尚未开始。
+- 本轮不修改相邻仓库、不提交、不推送；下文“保存并推送”为此前检查点历史，不是本轮操作授权。
+
+## 检查点历史结论
 
 **本次是开发检查点，不是 DSK-008 完成交付，也不是发布版本。**
 

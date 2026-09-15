@@ -77,13 +77,21 @@ export function scanDskPayload(value: unknown): string | null {
     return null;
 }
 
-// Same sender/frame policy as the existing director-host channel: the event must come from the
-// app's own webContents main frame on the director://app/ origin (A3).
-export function isTrustedDskFrame(event: { sender?: unknown; senderFrame?: { url?: unknown } | null }, window: { webContents?: unknown; isDestroyed?: () => boolean }): boolean {
+// Trust policy for the dsk channel (A3, tightened per review R1): the event must be sent by the
+// app's own webContents AND originate from exactly that webContents' main frame object — a
+// same-URL sub-frame is a different WebFrameMain instance and must not pass — plus the exact
+// director://app/ origin and a live window. Pure structural types: no Electron import.
+export function isTrustedDskFrame(
+    event: { sender?: unknown; senderFrame?: unknown } | null | undefined,
+    window: { webContents?: unknown; isDestroyed?: () => boolean } | null | undefined,
+): boolean {
     if (!event || !window) return false;
     if (typeof window.isDestroyed === 'function' && window.isDestroyed()) return false;
+    const mainFrame = (window.webContents as { mainFrame?: unknown } | null | undefined)?.mainFrame;
+    if (!mainFrame) return false;
+    if (event.senderFrame !== mainFrame) return false;
     if (event.sender !== window.webContents) return false;
-    const url = event.senderFrame?.url;
+    const url = (event.senderFrame as { url?: unknown } | null)?.url;
     return typeof url === 'string' && url === 'director://app/';
 }
 

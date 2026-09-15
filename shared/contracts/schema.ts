@@ -6,6 +6,10 @@
 // - suite/enum values, finite numbers, ISO timestamps and sha256 hashes are closed sets;
 // - shot bounds: single shot 5-15s, multi-shot only 3-5 shots of one scene, each 5-15s,
 //   24fps-frame-aligned durations, plan total equals the sum of its shots, multi-shot total 15-75s;
+//   a requested shot count n pins the spec total to the exact window 5n-15n seconds (R3);
+// - shot plans reject duplicate roleIds entries per shot (R2) and keep roles/entity mappings total;
+// - the model-call budget is capped at the approved whole-workflow maximum of 17 requests (R4);
+// - model request/response bookkeeping events must carry requestId and stepId (R5);
 // - model proposals carry suite/semantic parameters only and cannot express edit operations;
 // - compiled proposals reference the plan hash and reuse the engine EditOperation shape,
 //   but nothing in this task compiles or executes them (DSK-008 wires that).
@@ -76,6 +80,14 @@ export const StorySpecSchema = z.strictObject({
     } else {
         if (value.targetDurationSec < 15) fail(['targetDurationSec'], '多镜头模式目标总时长必须为 15-75 秒');
         if (value.requestedShots !== undefined && value.requestedShots < 3) fail(['requestedShots'], '多镜头模式必须为同场景 3-5 镜头');
+        // R3: a requested shot count makes the duration window exact: 5n <= total <= 15n keeps
+        // every shot inside 5-15s solvable; omitted requestedShots keeps the 15-75s semantics only.
+        if (value.requestedShots !== undefined) {
+            const minTotal = 5 * value.requestedShots;
+            const maxTotal = 15 * value.requestedShots;
+            if (value.targetDurationSec < minTotal) fail(['targetDurationSec'], `指定 ${value.requestedShots} 个镜头时目标总时长不得低于 ${minTotal} 秒`);
+            if (value.targetDurationSec > maxTotal) fail(['targetDurationSec'], `指定 ${value.requestedShots} 个镜头时目标总时长不得超过 ${maxTotal} 秒`);
+        }
     }
 });
 
@@ -105,6 +117,9 @@ export const ShotPlanSchema = z.strictObject({
     value.shots.forEach((shot, index) => {
         if (shotIds.has(shot.shotId)) fail(['shots', index], `镜头 shotId 重复：${shot.shotId}`);
         shotIds.add(shot.shotId);
+        // R2: duplicate roleIds entries make the declared-role set ambiguous; reject them explicitly
+        // instead of letting set dedup silently accept them.
+        if (new Set<string>(shot.roleIds).size !== shot.roleIds.length) fail(['shots', index, 'roleIds'], 'roleIds 存在重复角色');
         const declared = new Set<string>(shot.roleIds);
         const mapped = new Set<string>();
         shot.roles.forEach((role, roleIndex) => {
@@ -209,11 +224,22 @@ export const WorkflowEventSchema = z.strictObject({
     at: isoTimestamp,
     summary: z.string().min(1).max(300).optional(),
     payloadHash: sha256Hex.optional(),
+}).superRefine((value, ctx) => {
+    const fail = (path: (string | number)[], message: string) => ctx.addIssue({ code: 'custom', path, message });
+    // R5: model bookkeeping events must name their request and step so budget/audit trails stay
+    // attributable; genuinely workflow-level events (stage transitions, approvals, ...) may omit both.
+    if (value.type === 'model-request-registered' || value.type === 'model-response-recorded') {
+        if (value.requestId === undefined) fail(['requestId'], '模型请求登记/响应事件必须携带 requestId');
+        if (value.stepId === undefined) fail(['stepId'], '模型请求登记/响应事件必须携带 stepId');
+    }
 });
 
 // --- Approval bound to scope hash and finite budget ---
 export const BudgetSchema = z.strictObject({
-    maxModelRequests: integer(0, 50),
+    // R4: maxModelRequests is the whole-workflow model-call budget cap; the approved plan bounds
+    // the full pipeline at 17 requests (5 shots x (1 draft + 2 repairs) + 2 plan calls).
+    // Per-stage and per-shot accounting stays a DSK-007 concern and is not encoded here.
+    maxModelRequests: integer(0, 17),
     maxTotalTokens: integer(0, 10000000),
     maxWallClockSeconds: integer(1, 86400),
     maxShots: integer(1, 5),

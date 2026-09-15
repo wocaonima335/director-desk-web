@@ -1,0 +1,117 @@
+task_id: DSK-003
+subtask: rework-1
+title: "DSK-003 独立审查第一轮返工"
+status: IMPLEMENTED # coder 完成 R1-R6/N2 修复、N1 登记、R7 本机验证；待 director-reviewer 复审，不自评 PASS
+source_root: "E:/director-desk/director-desk-web"
+base_commit: "8b09b43c1fb03c8a42d98cd2e50b64db5486a98e"
+initial_worktree: "初始仅planner/reviewer provider修正；主会话随后更新DSK-003.yaml审查状态、implementation/PROGRESS.md续接状态及本任务单。coder写前记录完整状态与触及文件hash/备份，保留全部既有增量。基线证据 artifacts/tmp/dsk-003-resume/coordinator-baseline.json。"
+contract_version: "dsk.v1；只修正既定验收约束，不增字段/动作/错误码"
+approval:
+  approved: true
+  reference: "既有批准计划 .zcode/plans/plan-sess_eb0067fe-a560-495d-9531-9beb2e0d04fe.md；本轮用户明确继续已批准任务；director-planner agent_c5d20fe3-e0d3-4637-b4e0-00d82a631d10 确认原范围返工 PLAN_READY。"
+goal: "关闭独立审查R1-R6和N2，补齐R7本机证据，准确登记N1的008前契约门禁。"
+context_files:
+  - AGENTS.md
+  - .zcode/workflows/tasks/DSK-003.yaml
+  - implementation/DSK-003.md
+  - implementation/DSK-002.md
+  - shared/contracts/schema.ts
+  - shared/contracts/actions.ts
+  - desktop/preload.cjs
+  - desktop/integration.cjs
+  - tests/dsk-contracts.test.ts
+  - tests/dsk-contracts.test.cjs
+  - tests/fixtures/dsk-contracts/cases.json
+  - scripts/test-dsk-contracts-desktop.mjs
+allowed_changes:
+  - shared/contracts/schema.ts
+  - shared/contracts/actions.ts
+  - tests/dsk-contracts.test.ts
+  - tests/dsk-contracts.test.cjs
+  - tests/fixtures/dsk-contracts/cases.json
+  - scripts/test-dsk-contracts-desktop.mjs
+  - implementation/DSK-003.md
+  - .zcode/workflows/tasks/DSK-003.yaml
+  - .zcode/workflows/tasks/DSK-003-rework-1.yaml
+  - "任务列表.md：仅003状态及必要引用"
+  - "tmp/dsk-003-rework-1*：本轮独立日志、备份与取证，不覆盖历史或环境恢复证据"
+non_goals:
+  - "不进入004或后续任务；不实现阶段计数/编译器/失效检查"
+  - "不修改旧IPC行为、preload生产文件、开发代理配置、依赖及锁文件"
+  - "不增加公共字段/动作/错误码/哈希算法；N1仅登记准确缺口和008前门禁"
+  - "不重复迁入源码、不访问相邻仓库、不提交/推送/发布/真实付费调用"
+acceptance:
+  - id: R1
+    criterion: "非空senderFrame严格等于webContents.mainFrame，保留sender/精确URL/窗口有效性；纯共享类型不引入Electron。"
+    evidence_required: "两端同URL不同frame拒绝、主frame通过、缺frame或mainFrame/异sender/异URL/销毁窗口拒绝；prepared真实Electron主frame调用仍可达。"
+  - id: R2
+    criterion: "ShotPlan每镜头roleIds重复显式拒绝。"
+    evidence_required: "仅破坏角色声明的反例，两端检查目标issue；合法单/双人保留。"
+  - id: R3
+    criterion: "指定requestedShots=n时满足5*n<=targetDurationSec<=15*n；省略语义不变。"
+    evidence_required: "拒绝3/75及5/15；接受3/15、3/45、4/20、4/60、5/25、5/75及省略合法镜头数。"
+  - id: R4
+    criterion: "maxModelRequests为流程总预算上限，整数0-17；阶段与镜头计数留007。"
+    evidence_required: "0和17通过，18、50及负数拒绝；不新增字段或冒称阶段执行已实现。"
+  - id: R5
+    criterion: "model-request-registered和model-response-recorded均须带requestId和stepId；真正工作流级事件可省略。"
+    evidence_required: "完整通过、缺任一/均缺拒绝的逐类fixture，不顺改ProviderRequest或所有事件必填规则。"
+  - id: R6
+    criterion: "目标反例单因素、断言目标issue路径/类别；4/5镜头合法及全部11动作正反完整。"
+    evidence_required: "12.5秒合法对照，12.51秒错帧且总长同步；自动按动作集合检查覆盖；实际统计fixture分类数量。"
+  - id: N2
+    criterion: "mock Electron执行真实preload，捕获dsk实际信封版本与共享常量一致。"
+    evidence_required: "现有harness内执行测试，核对channel/version/action/data，不以静态字符串搜索代替。"
+  - id: N1
+    criterion: "明确planId/planHash与specId/specHash不是源快照绑定，scopeHash规范化及完整可信关联未定义。"
+    evidence_required: "报告登记008前必须审查源变化失效方案；若需新字段或契约语义须REPLAN重新批准，不假称完成。"
+  - id: R7
+    criterion: "最终源码完整测试、构建、prepare及Electron回环成功，记录本机实际证据。"
+    evidence_required: "命令/cwd/退出码/完整日志/运行环境/文件hash，失败不得跳过；人工Win11与窗口验收另列。"
+verification:
+  - command: "npm test"
+    cwd: "E:/director-desk/director-desk-web"
+    expected_result: "全量通过，无跳过失败"
+  - command: "npm run build"
+    cwd: "E:/director-desk/director-desk-web"
+    expected_result: "类型检查、构建及隐私检查通过"
+  - command: "npm run desktop:prepare"
+    cwd: "E:/director-desk/director-desk-web"
+    expected_result: "最终契约进入prepared产物"
+  - command: "node scripts/test-dsk-contracts-desktop.mjs"
+    cwd: "E:/director-desk/director-desk-web"
+    expected_result: "真实主frame新IPC及旧IPC回归通过"
+side_effects_approved:
+  - "复用已批准锁定依赖、免费测试资产与现有Chrome；现有构建产物和隔离Electron测试数据。"
+dependencies:
+  - "coder当前环境恢复任务结束，禁止同一工作树并发写入"
+rollback: "按本轮写前备份仅撤销本轮增量；保留主会话状态更新、provider修正和checkpoint内容，不reset/clean。"
+implementation:
+  agent: director-coder
+  changed_files:
+    - "shared/contracts/schema.ts（R2 roleIds 重复拒绝；R3 requestedShots 5n-15n 窗口；R4 maxModelRequests 0-17；R5 模型事件必带 requestId/stepId；头注释同步）"
+    - "shared/contracts/actions.ts（R1 isTrustedDskFrame 收紧为 senderFrame===webContents.mainFrame 严格身份，纯结构类型零 Electron 导入；integration.cjs/preload.cjs 零改动）"
+    - "tests/dsk-contracts.test.ts（R1 九项信任用例；R6 expectPath/expectMessage 目标断言 + unrecognized_keys 合成目标 + 动作覆盖断言 + 分类统计；zod v4 PropertyKey path 类型适配）"
+    - "tests/dsk-contracts.test.cjs（镜像 .ts 全部更新；N2 以 node:vm 执行真实 preload 断言实际信封 channel/version/action/data）"
+    - "tests/fixtures/dsk-contracts/cases.json（R6：151 例 = schema 122(28V/94I) + IPC 29；单因素反例、R3 六边界、4/5 镜头合法计划、12.5/12.51 对照、R4 预算边界、R5 逐类、11 动作正反全集；生成器 tmp/dsk-003-rework-1-gen-fixtures.mjs）"
+    - "implementation/DSK-003.md（新增返工第 1 轮章节：逐项修复/反例/R7 命令退出码/N1 登记/未验收项）"
+    - ".zcode/workflows/tasks/DSK-003.yaml（仅 status 与 unverified/rework_rounds 登记更新）"
+    - "任务列表.md（仅 003 状态两处：头部说明 + 总表行）"
+    - "tmp/dsk-003-rework-1-*（pre/post 状态、备份、fixture 生成器、R7 全部日志）"
+  checks:
+    - "定向契约测试（两端 harness）→ EXIT=0（9/9；151 fixture 两端分类统计一致）"
+    - "npm test → 首跑 EXIT=0（426/0/0），rerun EXIT=0（426/0/0）；日志 tmp/dsk-003-rework-1-test-npm-test*.log"
+    - "npm run build → 首跑 EXIT=2（测试文件 issueTargets 类型与 zod v4 PropertyKey[] path 不兼容，allowed_changes 内修复），rerun EXIT=0"
+    - "npm run desktop:prepare → 首跑 EXIT=2（pre 钩子同因），rerun EXIT=0；staged integration.cjs 含 R1 mainFrame 与 R4 (0,17) 标记"
+    - "node scripts/test-dsk-contracts-desktop.mjs → 首跑 EXIT=0 但对象为旧 prepared 产物（证据无效已声明不计入）；rerun 于 17:00:02Z 新产物 EXIT=0（DESKTOP-DSK-OK，旧 IPC 回归完整）"
+    - "写前/写后状态与哈希：tmp/dsk-003-rework-1-pre-state.txt / post-state.txt / backup/；provider 两处修正哈希前后不变"
+  blockers: []
+review:
+  agent: director-reviewer
+  verdict: PENDING
+  findings: []
+  unverified:
+    - "人工 Electron 窗口走查、Windows 11 x64、真实供应商兼容性：本轮未做，保留独立人工验收项"
+    - "npm ci 未重跑（本轮零依赖变更；npm 11.17 allow-scripts 对 electron 安装脚本门禁的补救属环境恢复任务，证据在 artifacts/tmp/dsk-003-resume/）"
+    - "N1 仅登记未实现：008 前须审查源变化失效方案，新字段/语义需 REPLAN"
+  rework_rounds: 1
