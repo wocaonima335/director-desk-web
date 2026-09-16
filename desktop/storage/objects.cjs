@@ -11,6 +11,8 @@ const crypto = require('node:crypto');
 const { pipeline } = require('node:stream/promises');
 
 const OBJECT_EXT = '.json';
+// Default cap for reads without a declared length; matches the approved 64MiB project budget.
+const OBJECT_MAX_BYTES = 64 * 1024 * 1024;
 
 function sha256Hex(buffer) {
     return crypto.createHash('sha256').update(buffer).digest('hex');
@@ -28,20 +30,102 @@ function tmpName() {
 }
 
 /** Create one object store rooted at <root>/projects. faults.{write,sync,close,rename} inject I/O failures. */
-function createObjectStore({ root, faults = {} }) {
+function createObjectStore({ root, faults = {}, maxBytes = OBJECT_MAX_BYTES } = {}) {
     const call = (hook, fallback) => hook ? hook() : fallback();
+    let realRoot;
+    const ensureRealRoot = () => {
+        if (!realRoot) {
+            // The root may not exist yet (fresh stores); create it before resolving the real path.
+            fsSync.mkdirSync(root, { recursive: true });
+            realRoot = fsSync.realpathSync(root);
+        }
+        return realRoot;
+    };
+    // F02: walk EVERY component from the real store root down; a junction/symlink or non-directory
+    // anywhere along the chain (projects/<id>/objects) is refused before any read or write.
+    async function walkTrusted(...parts) {
+        let current = ensureRealRoot();
+        for (const part of parts) {
+            current = path.join(current, part);
+            let stat = null;
+            try { stat = await fsp.lstat(current); } catch { /* missing component */ }
+            if (stat && stat.isSymbolicLink()) {
+                throw Object.assign(Error('项目路径不允许符号链接或 junction'), { reason: 'path-refused' });
+            }
+            if (stat && !stat.isDirectory()) {
+                throw Object.assign(Error('项目路径组件不是目录'), { reason: 'path-refused' });
+            }
+        }
+        return current;
+    }
+    /** walkTrusted + creation of missing components + realpath containment proof afterwards. */
+    async function ensureTrustedDir(...parts) {
+        let current = ensureRealRoot();
+        for (const part of parts) {
+            current = path.join(current, part);
+            let stat = null;
+            try { stat = await fsp.lstat(current); } catch { /* missing component */ }
+            if (stat && stat.isSymbolicLink()) {
+                throw Object.assign(Error('项目路径不允许符号链接或 junction'), { reason: 'path-refused' });
+            }
+            if (stat && !stat.isDirectory()) {
+                throw Object.assign(Error('项目路径组件不是目录'), { reason: 'path-refused' });
+            }
+            if (!stat) await fsp.mkdir(current);
+        }
+        const real = fsSync.realpathSync(current);
+        if (real !== current && !real.startsWith(ensureRealRoot() + path.sep)) {
+            throw Object.assign(Error('项目目录解析到存储根之外'), { reason: 'path-refused' });
+        }
+        return current;
+    }
+    /** F05: stat first, then read at most limit+1 bytes so an oversized/growing file can never
+     * be fully buffered before the length check. Reports the bytes actually read. */
+    let lastReadBytes = 0;
+    async function readBounded(file, { limit, label }) {
+        const linkStat = await fsp.lstat(file).catch(error => {
+            if (error && error.code === 'ENOENT') return null;
+            throw Object.assign(Error(`${label}不可读`), { reason: 'io-failure' });
+        });
+        if (linkStat && linkStat.isSymbolicLink()) {
+            throw Object.assign(Error(`${label}路径是符号链接或 junction`), { reason: 'path-refused' });
+        }
+        if (!linkStat) throw Object.assign(Error(`${label}缺失`), { reason: 'corrupt-object' });
+        if (!linkStat.isFile()) throw Object.assign(Error(`${label}不是普通文件`), { reason: 'corrupt-object' });
+        if (limit !== undefined && linkStat.size > limit) {
+            lastReadBytes = 0;
+            throw Object.assign(Error(`${label}大小超过上限`), { reason: 'corrupt-object' });
+        }
+        const bound = (limit ?? maxBytes) + 1;
+        const handle = await fsp.open(file, 'r');
+        try {
+            const buffer = Buffer.alloc(bound);
+            const { bytesRead } = await handle.read(buffer, 0, bound, 0);
+            lastReadBytes = bytesRead;
+            if (bytesRead > bound - 1) {
+                throw Object.assign(Error(`${label}超过长度上限`), { reason: 'corrupt-object' });
+            }
+            return buffer.subarray(0, bytesRead);
+        } finally {
+            try { await handle.close(); } catch { /* already closed */ }
+        }
+    }
     return {
         root,
         sha256Hex,
+        get _lastReadBytes() { return lastReadBytes; },
+        /** Test/lifecycle hook: the real resolved store root. */
+        realRootPath: () => ensureRealRoot(),
+        /** F02: shared guard for sibling stores (uploads dir); returns the trusted directory. */
+        trustedSubdir: (...parts) => ensureTrustedDir(...parts),
 
         /** Write canonical bytes, publish under <digest>.json; returns { digest, length }.
          * R2: an object that already exists under its digest name must prove its content — same
          * length alone is NOT enough; a tampered file is reported corrupt and never overwritten
-         * or repaired. Symbolic links/junctions are refused on every touched path. */
+         * or repaired. F02: every path component is walked and junctions/symlinks refused. */
         async putObject(projectId, bytes) {
             const digest = sha256Hex(bytes);
-            const dir = projectDir(root, projectId);
-            await fsp.mkdir(dir, { recursive: true });
+            const dir = await ensureTrustedDir('projects', projectId, 'objects');
             const finalPath = path.join(dir, digest + OBJECT_EXT);
             let existingStat;
             try { existingStat = await fsp.lstat(finalPath); } catch { existingStat = null; }
@@ -52,8 +136,12 @@ function createObjectStore({ root, faults = {} }) {
                 if (!existingStat.isFile()) {
                     throw Object.assign(Error('同名对象路径不是普通文件'), { reason: 'corrupt-object' });
                 }
+                if (existingStat.size !== bytes.length) {
+                    // F05: refuse on the stat BEFORE reading a potentially huge tampered file.
+                    throw Object.assign(Error('同名对象内容与摘要不符，已拒绝写入且不覆盖'), { reason: 'corrupt-object' });
+                }
                 // Immutable store: verify the existing bytes actually hash to the digest name.
-                const existing = await fsp.readFile(finalPath);
+                const existing = await readBounded(finalPath, { limit: bytes.length, label: '同名对象' });
                 if (existing.length !== bytes.length || sha256Hex(existing) !== digest) {
                     throw Object.assign(Error('同名对象内容与摘要不符，已拒绝写入且不覆盖'), { reason: 'corrupt-object' });
                 }
@@ -81,21 +169,25 @@ function createObjectStore({ root, faults = {} }) {
         },
 
         /** Read and verify one object; throws with a stable reason on missing/corrupt content.
-         * Symlink/junction indirection on the object path is refused (same policy as writes). */
+         * F02: the whole directory chain is walked and junction/symlink indirection refused.
+         * F05: the size is checked on the stat BEFORE reading, and the read is bounded by the
+         * declared length (+1 growth sentinel), so an oversized or growing file is never fully
+         * buffered. The bytes actually read are reported via _lastReadBytes for evidence. */
         async getObject(projectId, digest, expectedLength) {
             if (!/^[0-9a-f]{64}$/.test(digest)) throw Object.assign(Error('对象摘要无效'), { reason: 'corrupt-object' });
-            const file = path.join(projectDir(root, projectId), digest + OBJECT_EXT);
-            let linkStat;
-            try { linkStat = await fsp.lstat(file); } catch { linkStat = null; }
-            if (linkStat && linkStat.isSymbolicLink()) {
-                throw Object.assign(Error('对象路径是符号链接或 junction'), { reason: 'path-refused' });
-            }
+            const dir = await walkTrusted('projects', projectId, 'objects');
+            const file = path.join(dir, digest + OBJECT_EXT);
             let bytes;
             try {
-                bytes = await fsp.readFile(file);
+                bytes = await readBounded(file, {
+                    limit: expectedLength !== undefined ? expectedLength : undefined,
+                    label: '登记的对象文件',
+                });
             } catch (error) {
-                if (error && error.code === 'ENOENT') throw Object.assign(Error('登记的对象文件缺失'), { reason: 'corrupt-object' });
-                throw Object.assign(Error('对象文件不可读'), { reason: 'io-failure' });
+                if (error && error.reason === 'corrupt-object' && /缺失/.test(String(error.message))) {
+                    throw Object.assign(Error('登记的对象文件缺失'), { reason: 'corrupt-object' });
+                }
+                throw error;
             }
             if (expectedLength !== undefined && bytes.length !== expectedLength) {
                 throw Object.assign(Error('对象长度与登记值不符'), { reason: 'corrupt-object' });
@@ -106,7 +198,7 @@ function createObjectStore({ root, faults = {} }) {
 
         /** Cheap existence+size map for every file in one project: { digest: {size} }, plus orphan count. */
         async listObjects(projectId) {
-            const dir = projectDir(root, projectId);
+            const dir = await walkTrusted('projects', projectId, 'objects');
             const files = new Map();
             let entries;
             try {
@@ -159,12 +251,17 @@ function createObjectStore({ root, faults = {} }) {
         },
 
         /** Stream one object of this store to an arbitrary file (backup), verifying length and
-         * digest while streaming (R8: no full-buffer read of the object). */
+         * digest while streaming (R8: no full-buffer read of the object). F02: the source chain
+         * is walked; F05: the stat size is checked against the declared length before reading. */
         async streamObjectToFile(projectId, digest, expectedLength, destPath) {
-            const source = path.join(projectDir(root, projectId), digest + OBJECT_EXT);
+            const dir = await walkTrusted('projects', projectId, 'objects');
+            const source = path.join(dir, digest + OBJECT_EXT);
             const linkStat = await fsp.lstat(source).catch(() => null);
             if (linkStat && linkStat.isSymbolicLink()) {
                 throw Object.assign(Error('对象路径是符号链接或 junction'), { reason: 'path-refused' });
+            }
+            if (linkStat && linkStat.size !== expectedLength) {
+                throw Object.assign(Error('对象大小与登记值不符'), { reason: 'corrupt-object' });
             }
             const hash = crypto.createHash('sha256');
             let seen = 0;
@@ -192,8 +289,7 @@ function createObjectStore({ root, faults = {} }) {
          * and digest while streaming, then publishing through the same immutable path as
          * putObject (R8/R2: no full-buffer copy, existing objects must prove their content). */
         async streamFileToObject(sourcePath, projectId, expectedDigest, expectedLength) {
-            const dir = projectDir(root, projectId);
-            await fsp.mkdir(dir, { recursive: true });
+            const dir = await ensureTrustedDir('projects', projectId, 'objects');
             const finalPath = path.join(dir, expectedDigest + OBJECT_EXT);
             const existingStat = await fsp.lstat(finalPath).catch(() => null);
             if (existingStat && existingStat.isSymbolicLink()) {
@@ -236,9 +332,11 @@ function createObjectStore({ root, faults = {} }) {
             return { digest: expectedDigest, length: seen };
         },
 
-        /** Remove a whole project directory (restore rollback of a fresh, never-registered dir). */
+        /** Remove a whole project directory (restore rollback of a fresh, never-registered dir).
+         * F02: the chain is walked first — a junctioned project dir is refused, never followed. */
         async removeProject(projectId) {
-            await fsp.rm(projectDir(root, projectId), { recursive: true, force: true });
+            const dir = await walkTrusted('projects', projectId);
+            await fsp.rm(path.join(dir, 'objects'), { recursive: true, force: true });
         },
     };
 }

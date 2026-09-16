@@ -59,6 +59,26 @@ test('editor adapter preserves scene names, project title, selection/time and do
     project = workspace.undo(project)!; assert.equal(workspace.restoredView!.time, 8); assert.deepEqual(project, b);
 });
 
+test('R5: reset clears undo/redo so a managed switch cannot drag the old project back; plain imports keep undo', () => {
+    let project = demoProject();
+    const workspace = new SceneWorkspace(project, () => ({ time: 0, preview: 'program', selected: project.entities[0].id }));
+    project.name = '工程A已提交';
+    workspace.begin(project); workspace.commit(project);
+    assert.equal(workspace.undoStack.length, 1, 'the old project sits in undo before the switch');
+    const replacement = readSceneDocument(demoProject()); replacement.name = '工程B';
+    project = workspace.reset(replacement);
+    assert.equal(workspace.undoStack.length, 0, 'reset must start a fresh history');
+    assert.equal(workspace.redoStack.length, 0, 'reset must clear redo as well');
+    assert.equal(workspace.undo(project), null, 'undo must not resurrect the previous managed project');
+    assert.equal(workspace.redo(project), null, 'redo must not resurrect the previous managed project');
+    assert.equal(workspace.document().name, '工程B');
+    // Plain unmanaged imports keep the replace/undo semantics (regression guard).
+    const imported = readSceneDocument(demoProject()); imported.name = '导入C';
+    project = workspace.replace(imported, workspace.context, '打开', true);
+    assert.equal(workspace.undoStack.length, 1, 'plain imports keep the previous document in undo');
+    assert.equal(workspace.undo(project)!.name, '工程B');
+});
+
 test('multi-scene recovery includes inactive-only models, restores once and rejects damaged scene structure before intake', async () => {
     const source = demoProject(), bytes = new Uint8Array(await fs.readFile('test-assets/external/kenney-furniture/Models/GLTF format/chair.glb'));
     const data = packModelFiles('chair.glb', [{ path: 'chair.glb', bytes }]), id = await modelResourceId(data);

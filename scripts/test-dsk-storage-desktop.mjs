@@ -58,13 +58,13 @@ const documentBytes = new TextEncoder().encode(documentJson).length;
 
 const LEASE_TTL_MS = 4000;
 const storageDir = path.join(root, 'tmp', `dsk-004-storage-lib-${process.pid}`);
-const profiles = [1, 2].map(index => path.join(root, 'tmp', `dsk-004-storage-profile-${process.pid}-${index}`));
+const profiles = [1, 2, 3, 4].map(index => path.join(root, 'tmp', `dsk-004-storage-profile-${process.pid}-${index}`));
 for (const dir of [storageDir, ...profiles]) await fs.mkdir(dir, { recursive: true });
 
 const executable = require('electron');
 const children = [];
-function launch(profile) {
-    const child = spawn(executable, [app, `--director-test-profile=${profile}`, `--director-storage-dir=${storageDir}`, '--remote-debugging-port=0'], {
+function launch(profile, storageOverride) {
+    const child = spawn(executable, [app, `--director-test-profile=${profile}`, `--director-storage-dir=${storageOverride ?? storageDir}`, '--remote-debugging-port=0'], {
         cwd: root,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env, DIRECTOR_STORAGE_LEASE_TTL_MS: String(LEASE_TTL_MS) },
@@ -83,9 +83,12 @@ process.on('exit', () => { for (const child of children) killTree(child); });
 
 async function terminate(child) {
     child.removeAllListeners('exit');
+    // Already-exited children never emit 'exit' again; return instead of awaiting forever
+    // (an unref'd fallback timer cannot keep the event loop alive to resolve).
+    if (child.exitCode !== null || child.signalCode !== null) return;
     if (!child.killed && child.pid) child.kill();
     await new Promise(resolve => {
-        const timer = setTimeout(() => { killTree(child); resolve(); }, 5000).unref();
+        const timer = setTimeout(() => { killTree(child); resolve(); }, 5000);
         child.once('exit', () => { clearTimeout(timer); resolve(); });
     });
 }
@@ -156,10 +159,10 @@ true;
 
 // Hard deadline so a stalled CDP/Electron cannot hang the runner (exit 0 only on success).
 const deadline = setTimeout(() => {
-    fail(`global deadline (300s) exceeded`);
+    fail(`global deadline (600s) exceeded`);
     for (const child of children) killTree(child);
     process.exit(1);
-}, 300000).unref();
+}, 600000).unref();
 
 try {
     // --- Phase 1: single real process — full managed snapshot round trip ---------------------
@@ -349,6 +352,280 @@ try {
     }
     await b.browser.close();
     await terminate(childB);
+
+    // --- Phase 6: REAL renderer UI loop (R4/R5/R6/R11) --------------------------------------
+    // Drives the actual DOM of the prepared app: startup auto-load of the persisted managed
+    // choice, the new/import dirty confirmation (cancel AND accept paths), a real .director
+    // import that must leave the managed session first, unmanaged import undo semantics, a
+    // managed reopen that starts a fresh undo history (no cross-project leak), nextCursor
+    // pagination, the project.status panel and an explicit UI leave. Backup/restore keep their
+    // NATIVE directory pickers, which CDP cannot drive — recorded as the manual boundary.
+    // Let process B's lease expire so profile C's startup open acquires it cleanly.
+    await new Promise(resolve => setTimeout(resolve, LEASE_TTL_MS + 1500));
+    const childC = launch(profiles[2]);
+    const c = await waitReady(childC, profiles[2]);
+    await c.page.evaluate(pageCallHelper);
+    // R6 startup: the persisted managed choice (activated in phase 1) must auto-load through the
+    // busy-guarded startup path and land confirmed with a clean save state.
+    await c.page.waitForFunction(
+        () => document.querySelector('#save-status')?.textContent?.startsWith('受管项目：'),
+        undefined, { timeout: 30000 });
+    const projectATitle = await c.page.title();
+    const statusAtUiStart = await c.page.evaluate(projectId => window.__dskCall('project.status', { projectId }), phase1.projectId);
+    if (!(expect(statusAtUiStart.ok, `phase6 initial status failed: ${code(statusAtUiStart)}`))) { }
+    const revisionAtUiStart = statusAtUiStart.data.revision;
+    console.log(`PHASE6.0-OK: startup auto-loaded managed project A (revision ${revisionAtUiStart}) through the real UI`);
+
+    // --- Phase 6MAX: F05 critical evidence on the real desktop app ---------------------------
+    // A LEGAL full-budget project (exactly 67108864 canonical bytes) saves, commits, downloads
+    // byte-identical and re-opens (fresh snapshot.read); 67108865 bytes are refused by contract.
+    const maxDocument = (() => {
+        // The document scanner caps single strings at 32MiB, so the budget is composed of many
+        // legal reference payloads (220 segments) instead of one giant string.
+        const segments = 220;
+        const reference = index => ({ id: `reference-max-${index}`, name: `满额${index}`, data: 'data:image/png;base64,' + 'A'.repeat(64) });
+        const padded = JSON.parse(documentJson);
+        padded.scenes[0].state.references = Array.from({ length: segments }, (_, index) => reference(index));
+        const fixedBytes = Buffer.byteLength(helper.canonicalJson(padded), 'utf8'); // measured WITH 64 A's per segment
+        const padding = Math.floor((67108864 - fixedBytes) / segments) + 64; // the 64 A's are replaced, not added
+        for (const entry of padded.scenes[0].state.references) entry.data = 'data:image/png;base64,' + 'A'.repeat(padding);
+        const remainder = 67108864 - (Buffer.byteLength(helper.canonicalJson(padded), 'utf8'));
+        padded.scenes[0].state.references[0].data = 'data:image/png;base64,' + 'A'.repeat(padding + remainder);
+        const canonical = helper.canonicalJson(padded);
+        const bytes = Buffer.byteLength(canonical, 'utf8');
+        if (bytes !== 67108864) throw new Error(`64MiB fixture construction failed: ${bytes}`);
+        return { json: canonical, bytes, digest: crypto.createHash('sha256').update(Buffer.from(canonical, 'utf8')).digest('hex') };
+    })();
+    const maxDoc = await c.page.evaluate(async payload => {
+        const call = window.__dskCall;
+        const created = await call('project.create', { name: '满额工程' });
+        if (!created.ok) return { stage: 'create', reply: created };
+        const sessionId = created.data.sessionId;
+        // One byte beyond the budget is refused by the frozen payload contract.
+        const overOne = await call('storage.v1.upload.begin', { sessionId, expectedRevision: 0, declaredLength: payload.bytes + 1 });
+        // The full 64MiB document uploads through the in-page chunk loop (1370 chunks).
+        const uploaded = await window.__dskUpload(sessionId, 0, payload.json, '满额工程');
+        if (!uploaded.commit || !uploaded.commit.ok) return { stage: 'upload', reply: uploaded, overOne };
+        // Re-open: a fresh snapshot.read + full download must be byte-identical.
+        const read = await call('storage.v1.snapshot.read', { sessionId });
+        if (!read.ok) return { stage: 'read', reply: read, overOne };
+        const parts = []; let final = false;
+        while (!final) {
+            const chunk = await call('storage.v1.snapshot.download.chunk', { transferId: read.data.transferId });
+            if (!chunk.ok) return { stage: 'chunk', reply: chunk, overOne };
+            parts.push(chunk.data.data);
+            final = chunk.data.final;
+        }
+        // Decode the base64 chunks back into the UTF-8 document string (no Buffer in the page).
+        const decoder = new TextDecoder('utf8');
+        let downloaded = '';
+        for (const part of parts) {
+            const binary = atob(part);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            downloaded += decoder.decode(bytes);
+        }
+        return {
+            overOne, uploaded, read,
+            declaredMatches: uploaded.begin.data.declaredLength === payload.bytes,
+            downloadedEquals: downloaded === payload.json,
+            downloadedLength: downloaded.length,
+            digest: uploaded.commit.data.snapshot.digest,
+        };
+    }, { json: maxDocument.json, bytes: maxDocument.bytes }).catch(error => ({ error: String(error) }));
+    if (!(expect(!maxDoc.error, `64MiB phase evaluate failed: ${maxDoc.error}`))) { }
+    expect(maxDoc.overOne && !maxDoc.overOne.ok, `67108865 bytes must be refused: ${JSON.stringify(maxDoc.overOne)}`);
+    expect(maxDoc.uploaded && maxDoc.uploaded.commit && maxDoc.uploaded.commit.ok,
+        `the full 64MiB upload failed: ${JSON.stringify(maxDoc.uploaded && (maxDoc.uploaded.begin || maxDoc.uploaded.chunk || maxDoc.uploaded.commit))}`);
+    expect(maxDoc.declaredMatches, 'the declared length must be exactly 67108864');
+    expect(maxDoc.digest === maxDocument.digest, 'the committed digest must match the node-side canonical bytes');
+    expect(maxDoc.downloadedEquals, `the reopened download must be byte-identical (${maxDoc.downloadedLength} bytes)`);
+    console.log(`PHASE6MAX-OK: legal 67108864-byte project saved/committed (digest ${maxDocument.digest.slice(0, 12)}…)/downloaded byte-identical/re-read; 67108865 refused`);
+
+
+    // 6.1 R4 cancel: dirty editor + 新建 → the discard confirmation appears; cancelling keeps A.
+    await c.page.click('[data-act="add-camera"]');
+    await c.page.waitForFunction(
+        () => document.querySelector('#save-status')?.textContent?.includes('未保存'),
+        undefined, { timeout: 10000 });
+    await c.page.click('[data-menu="file"]');
+    await c.page.click('#application-menu-file [data-act="scene-templates"]');
+    await c.page.waitForSelector('[data-act="confirm-new"]', { timeout: 10000 });
+    await c.page.click('[data-act="confirm-new"]');
+    await c.page.waitForSelector('#managed-switch-confirm', { timeout: 10000 });
+    await c.page.click('#managed-switch-cancel');
+    await c.page.waitForSelector('#managed-switch-confirm', { state: 'detached', timeout: 10000 });
+    expect((await c.page.title()) === projectATitle, 'cancelling the dirty confirm must keep project A loaded');
+    expect((await c.page.evaluate(() => document.querySelector('#save-status')?.textContent))?.includes('未保存'),
+        'cancelling the dirty confirm must keep the unsaved marker');
+    const statusAfterCancel = await c.page.evaluate(projectId => window.__dskCall('project.status', { projectId }), phase1.projectId);
+    expect(statusAfterCancel.ok && statusAfterCancel.data.revision === revisionAtUiStart,
+        `a cancelled 新建 must not write into project A: ${JSON.stringify(statusAfterCancel.data && statusAfterCancel.data.revision)}`);
+    console.log('PHASE6.1-OK: managed dirty confirm cancel kept the document identity, dirty state and project A untouched');
+
+    // 6.2 R4 accept: a real .director import must leave the managed session before switching.
+    // The file is set first; the parser/verifier run while A is untouched, and only then does the
+    // discard confirmation appear (A is still dirty from 6.1).
+    const importDocument = helper.readSceneDocument(helper.demoProject());
+    importDocument.name = '导入R4工程';
+    const importPath = path.join(root, 'tmp', `dsk-004-import-${process.pid}.director`);
+    await fs.writeFile(importPath, JSON.stringify(importDocument), 'utf8');
+    await c.page.setInputFiles('#project-file', importPath);
+    await c.page.waitForSelector('#managed-switch-confirm', { timeout: 20000 });
+    await c.page.click('#managed-switch-accept');
+    // The leave itself updates save-status, but applyDocument immediately overwrites it with the
+    // recovery/save flow text — the loaded document title plus the persisted bootstrap mode are
+    // the reliable leave evidence here.
+    await c.page.waitForFunction(
+        () => document.title.includes('导入R4工程'),
+        undefined, { timeout: 20000 });
+    expect((await c.page.title()).includes('导入R4工程'), 'the imported document must replace the editor content after leave');
+    const bootAfterImport = await c.page.evaluate(() => window.__dskCall('storage.v1.session.bootstrap', {}));
+    expect(bootAfterImport.ok && bootAfterImport.data.mode === 'unmanaged', `import must persist the unmanaged choice, got ${JSON.stringify(bootAfterImport.data)}`);
+    const statusAfterImport = await c.page.evaluate(projectId => window.__dskCall('project.status', { projectId }), phase1.projectId);
+    expect(statusAfterImport.ok && statusAfterImport.data.revision === revisionAtUiStart,
+        `imported content must never write into the managed project: ${JSON.stringify(statusAfterImport.data && statusAfterImport.data.revision)}`);
+    console.log('PHASE6.2-OK: real .director import left the managed session (confirm accept) and wrote nothing into project A');
+
+    // 6.3 R5 unmanaged semantics: a plain new-project/import keeps the undo path across documents.
+    await c.page.click('[data-menu="file"]');
+    await c.page.click('#application-menu-file [data-act="scene-templates"]');
+    await c.page.waitForSelector('[data-act="confirm-new"]', { timeout: 10000 });
+    await c.page.click('[data-act="confirm-new"]');
+    await c.page.waitForFunction(
+        title => !document.title.includes(title),
+        '导入R4工程', { timeout: 15000 });
+    const templateTitle = await c.page.title();
+    await c.page.keyboard.press('Control+z');
+    await c.page.waitForFunction(
+        title => document.title.includes(title),
+        '导入R4工程', { timeout: 15000 });
+    console.log('PHASE6.3-OK: unmanaged new/import keeps the cross-document undo semantics (undo returned the imported project)');
+    await c.page.keyboard.press('Control+Shift+z'); // forward again before the managed reopen
+
+    // 6.4 F10 cancel path: opening A while the template doc is dirty asks for confirmation and
+    // cancelling has ZERO side effects (no candidate, no identity change, document untouched).
+    // The library entry lives inside the file menu popover (mountApplicationMenu moves it there).
+    await c.page.click('[data-menu="file"]');
+    await c.page.click('#project-library-open');
+    await c.page.waitForSelector('#project-library', { timeout: 10000 });
+    await c.page.click(`[data-library-open="${phase1.projectId}"]`);
+    await c.page.waitForSelector('#managed-switch-confirm', { timeout: 10000 });
+    await c.page.click('#managed-switch-cancel');
+    await c.page.waitForSelector('#managed-switch-confirm', { state: 'detached', timeout: 10000 });
+    expect((await c.page.title()) === templateTitle, 'cancelling the open confirmation must keep the current document');
+    const bootAfterCancel = await c.page.evaluate(() => window.__dskCall('storage.v1.session.bootstrap', {}));
+    expect(bootAfterCancel.ok && bootAfterCancel.data.mode === 'unmanaged',
+        `cancelling must not touch the persisted choice, got ${JSON.stringify(bootAfterCancel.data)}`);
+
+    // 6.4b F08/R5 accept path: the confirmation REAPPEARING proves the dirty state survived the
+    // cancel (F10 zero side effects); the managed switch then commits only after activate, and
+    // the fresh history forbids undo from dragging the previous document into project A.
+    await c.page.click(`[data-library-open="${phase1.projectId}"]`);
+    await c.page.waitForSelector('#managed-switch-confirm', { timeout: 10000 });
+    await c.page.click('#managed-switch-accept');
+    await c.page.waitForFunction(
+        () => document.querySelector('#save-status')?.textContent?.startsWith('受管项目：'),
+        undefined, { timeout: 30000 });
+    expect((await c.page.title()) === projectATitle, 'reopening project A must restore its document');
+    // openProject finishes while ctx.busy is still held, so its closeModal is refused by the
+    // modal pages guard and the library modal stays open; close it for real before the undo key.
+    await c.page.click('.modal-footer [data-act="close-modal"]');
+    await c.page.waitForSelector('#project-library', { state: 'detached', timeout: 10000 });
+    const titleBeforeUndo = await c.page.title();
+    await c.page.keyboard.press('Control+z');
+    await new Promise(resolve => setTimeout(resolve, 500));
+    expect((await c.page.title()) === titleBeforeUndo,
+        'undo after a managed switch must not resurrect the previous project (fresh history)');
+    const statusAfterReopen = await c.page.evaluate(projectId => window.__dskCall('project.status', { projectId }), phase1.projectId);
+    expect(statusAfterReopen.ok && statusAfterReopen.data.revision === revisionAtUiStart,
+        `reopening must not modify project A: ${JSON.stringify(statusAfterReopen.data && statusAfterReopen.data.revision)}`);
+    console.log('PHASE6.4-OK: managed reopen via the library UI reloaded A with a fresh undo history; the F10 cancel path left zero side effects');
+
+    // 6.4c F09 same-project reopen REUSES the live session: the lease generation must not move
+    // (a close+reopen churn would increment it), and no dirty confirmation appears when clean.
+    const generationBeforeReuse = statusAfterReopen.data.lease.generation;
+    await c.page.click('[data-menu="file"]');
+    await c.page.click('#project-library-open');
+    await c.page.waitForSelector('#project-library', { timeout: 10000 });
+    await c.page.click(`[data-library-open="${phase1.projectId}"]`);
+    await c.page.waitForFunction(
+        () => [...document.querySelectorAll('#toasts .toast')].some(toast => toast.textContent?.includes('已重开受管项目')),
+        undefined, { timeout: 30000 });
+    const statusAfterReuse = await c.page.evaluate(projectId => window.__dskCall('project.status', { projectId }), phase1.projectId);
+    expect(statusAfterReuse.ok && statusAfterReuse.data.lease.generation === generationBeforeReuse,
+        `a same-project reopen must reuse the session (generation ${generationBeforeReuse} → ${statusAfterReuse.data && statusAfterReuse.data.lease.generation})`);
+    await c.page.click('.modal-footer [data-act="close-modal"]');
+    await c.page.waitForSelector('#project-library', { state: 'detached', timeout: 10000 });
+    console.log(`PHASE6.4c-OK: same-project reopen reused the live session (lease generation stayed at ${generationBeforeReuse})`);
+
+    // 6.5 R11 pagination + status panel + explicit leave — REAL pointer and keyboard only (F11):
+    // no dispatchEvent, no DOM click synthesis, no force. The rows container scrolls natively.
+    await c.page.evaluate(async () => {
+        for (let index = 0; index < 58; index++) {
+            const created = await window.__dskCall('project.create', { name: '翻页项目' + String(index).padStart(2, '0') });
+            if (created.ok) await window.__dskCall('storage.v1.project.close', { sessionId: created.data.sessionId });
+        }
+    });
+    await c.page.click('[data-menu="file"]');
+    await c.page.click('#project-library-open');
+    await c.page.waitForSelector('#project-library', { timeout: 10000 });
+    expect((await c.page.locator('[data-library-open]').count()) === 50, 'the first page must list exactly 50 projects');
+    expect((await c.page.locator('[data-library-act="more"]').count()) === 1, 'nextCursor must surface the load-more button');
+    const totalProjects = (await c.page.evaluate(async () => {
+        let cursor, total = 0;
+        do {
+            const page = await window.__dskCall('storage.v1.project.list', { limit: 200, ...(cursor ? { cursor } : {}) });
+            if (!page.ok) throw new Error(page.error.message);
+            total += page.data.projects.length;
+            cursor = page.data.nextCursor;
+        } while (cursor);
+        return total;
+    }));
+    // F11 keyboard reachability: focus the load-more button and activate it with Enter.
+    await c.page.focus('[data-library-act="more"]');
+    await c.page.keyboard.press('Enter');
+    await c.page.waitForFunction(
+        expected => document.querySelectorAll('[data-library-open]').length === expected
+            && !document.querySelector('[data-library-act="more"]'),
+        totalProjects, { timeout: 15000 });
+    // F11 keyboard reachability for the per-row status query, then a real pointer click on leave.
+    await c.page.focus(`[data-library-status="${phase1.projectId}"]`);
+    await c.page.keyboard.press('Enter');
+    await c.page.waitForFunction(
+        () => document.querySelector('#library-status')?.textContent?.includes('租约'),
+        undefined, { timeout: 15000 });
+    const statusPanelText = await c.page.evaluate(() => document.querySelector('#library-status')?.textContent ?? '');
+    expect(statusPanelText.includes('健康'), 'the status panel must render the integrity counters');
+    const leaveButton = c.page.locator('[data-library-act="leave"]');
+    await leaveButton.scrollIntoViewIfNeeded();
+    await leaveButton.click();
+    await c.page.waitForFunction(
+        () => document.querySelector('#save-status')?.textContent === '普通会话（未管理）',
+        undefined, { timeout: 15000 });
+    const bootAfterLeave = await c.page.evaluate(() => window.__dskCall('storage.v1.session.bootstrap', {}));
+    expect(bootAfterLeave.ok && bootAfterLeave.data.mode === 'unmanaged', `UI leave must persist unmanaged, got ${JSON.stringify(bootAfterLeave.data)}`);
+    console.log('PHASE6.5-OK: library pagination (50 rows + nextCursor → 59), project.status panel (lease/integrity) and UI leave verified via real pointer and keyboard events');
+    await c.browser.close();
+    await terminate(childC);
+
+    // 6.6 R6 startup isolation: an unusable library must NOT fall back to legacy recovery.
+    const corruptStorage = path.join(root, 'tmp', `dsk-004-corrupt-storage-${process.pid}`);
+    await fs.writeFile(corruptStorage, 'not-a-directory', 'utf8');
+    const childE = launch(profiles[3], corruptStorage);
+    const e = await waitReady(childE, profiles[3]);
+    await e.page.waitForFunction(
+        () => document.querySelector('#save-status')?.textContent === '项目库初始化失败',
+        undefined, { timeout: 30000 });
+    const eToasts = await e.page.evaluate(() => document.querySelector('#toasts')?.textContent ?? '');
+    expect(eToasts.includes('项目库初始化失败'), 'the startup failure must be surfaced as a toast');
+    expect(eToasts.includes('不读取旧自动恢复'), 'the failed bootstrap must NOT fall back to legacy recovery');
+    console.log('PHASE6.6-OK: an unusable library surfaces the failure and skips legacy recovery at startup');
+    await e.browser.close();
+    await terminate(childE);
+    await fs.rm(importPath, { force: true });
+    await fs.rm(corruptStorage, { force: true });
+    console.log('PHASE6-BOUNDARY: backup/restore via the real UI still require the native directory picker (not CDP-drivable) and the uncertain-save reopen condition (status.revision > managed.revision) cannot be produced without a genuinely lost commit receipt — both stay on the manual verification boundary.');
     await fs.rm(storageDir, { recursive: true, force: true });
     for (const profile of profiles) await fs.rm(profile, { recursive: true, force: true });
 

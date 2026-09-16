@@ -28,7 +28,7 @@ import { assertProject, clone } from './model.ts';
 import { autosave, recover } from './storage.ts';
 import { SceneWorkspace } from './scenes/scene-workspace.ts';
 import { RecoveryAutosave } from './editor/recovery-autosave.ts';
-import { ManagedProjectController } from './editor/managed-project.ts';
+import { ManagedProjectController, leaveManagedBeforeSwitch } from './editor/managed-project.ts';
 import { mountProjectLibrary } from './ui/project-library.ts';
 import { readSceneDocument, projectForScene, type SceneDocument } from './scenes/sequence-project.ts';
 import type { SceneContext } from './scenes/sequence-session.ts';
@@ -243,10 +243,53 @@ function seek(t: number, deferSample = false) { if (busy)
 }
 function setView(value: string) { if (!['stage', 'split', 'shot'].includes(value)) return; mode = value; $('#viewports').className = 'viewports ' + value; document.querySelectorAll('.view-modes button[data-view]').forEach(el => el.classList.toggle('active', (el as HTMLElement).dataset.view === value)); engine.requestResize(); }
 async function saveProject() { return saveProjectFile(uiContext); }
-function applyDocument(document: SceneDocument, context: SceneContext, label: string, resetViews = false) {
+/** R4: modal confirmation for discarding unsaved edits; resolves false on any dismissal path
+ * (cancel button, close button or Escape). A body-level overlay on purpose: closeModal refuses
+ * while busy, and routing through the modal-page stack would leave stale parent entries. */
+function confirmDiscardEdits(reason: string): Promise<boolean> {
+    return new Promise(resolve => {
+        let settled = false;
+        const finish = (value: boolean) => {
+            if (settled) return;
+            settled = true;
+            document.removeEventListener('keydown', onEscape, true);
+            backdrop.remove();
+            resolve(value);
+        };
+        const onEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); finish(false); } };
+        const backdrop = document.createElement('div');
+        backdrop.className = 'modal-backdrop';
+        backdrop.innerHTML = `<section class="modal" role="dialog" aria-modal="true" aria-label="离开受管项目"><header class="modal-header"><div><h2>离开受管项目</h2></div><button type="button" id="managed-switch-close" class="icon-button" aria-label="关闭">×</button></header><div class="modal-body"><div id="managed-switch-confirm"><p class="modal-copy">${escape(reason)}会替换整个工程。当前受管项目有未保存的修改，这些修改不会写入项目库，替换后将无法找回。</p></div></div><footer class="modal-footer"><button type="button" id="managed-switch-cancel" class="subtle">取消（保留当前项目）</button><button type="button" id="managed-switch-accept" class="danger">放弃修改并继续</button></footer></section>`;
+        document.body.append(backdrop);
+        document.addEventListener('keydown', onEscape, true);
+        backdrop.querySelector<HTMLElement>('#managed-switch-accept')!.onclick = () => finish(true);
+        backdrop.querySelector<HTMLElement>('#managed-switch-cancel')!.onclick = () => finish(false);
+        backdrop.querySelector<HTMLElement>('#managed-switch-close')!.onclick = () => finish(false);
+    });
+}
+/** R4/R6: leave the managed session before the document identity changes; a refused confirm or a
+ * failed leave cancels the switch so the original project, dirty state and lease survive. */
+async function leaveManagedForSwitch(reason: string): Promise<boolean> {
+    const decision = await leaveManagedBeforeSwitch({
+        managedActive: managed.managedActive,
+        dirty,
+        confirmDiscard: () => confirmDiscardEdits(reason),
+        drainAutosave: () => drainRecovery(),
+        leave: () => managed.leave(),
+    }, reason);
+    if (decision.status === 'proceed') {
+        $('#save-status').textContent = '普通会话（未管理）';
+        return true;
+    }
+    if (decision.stage === 'leave') toast(`离开受管会话失败，已保留原项目与受管状态：${decision.error instanceof Error ? decision.error.message : String(decision.error)}`, true);
+    return false;
+}
+function applyDocument(document: SceneDocument, context: SceneContext, label: string, resetViews = false, resetHistory = false) {
     if (draft || history.pending || engine.exporting) throw Error('请先完成当前编辑或导出');
     for (const scene of document.scenes) engine.externalModels.assertReady(projectForScene(document, scene.id));
-    project = history.replace(document, context, label, resetViews);
+    // R5: resetHistory starts a fresh SceneSession, so a managed switch cannot drag the previous
+    // project's undo/redo (and its content) into the new session; plain imports keep replace.
+    project = resetHistory ? history.reset(document) : history.replace(document, context, label, resetViews);
     managed.epoch++; // DSK-004: the whole document changed; stale async completions must notice.
     restoreSceneView();
 }
@@ -261,11 +304,18 @@ function restoreSceneView() {
     playing = false; selectClip(null); engine.selectedPoint = -1; inspectorTab = 'base';
     changed(); extendTimelineView(uiContext, time); $('#timeline-center').click();
 }
-function createNew(template: SceneTemplate = 'bedroom') {
+async function createNew(template: SceneTemplate = 'bedroom') {
     if (draft) cancelPath();
     closeModal();
+    let next: SceneDocument;
     try {
-        applyDocument(readSceneDocument(createScene(template)), history.context, '新建工程', true);
+        next = readSceneDocument(createScene(template));
+    } catch (error) { toast((error as Error).message, true); return; }
+    // R4: a managed session is left (dirty confirmation + autosave drained) before the document
+    // identity changes; a refused or failed leave keeps the managed project fully untouched.
+    if (!await leaveManagedForSwitch('新建工程')) return;
+    try {
+        applyDocument(next, history.context, '新建工程', true);
         sidebarTab = 'scene'; query = ''; engine.viewHome(); setView('split'); renderPanels();
         toast('已新建' + project.name + '；可撤销返回上个项目');
     } catch (error) { toast((error as Error).message, true); }
@@ -308,7 +358,7 @@ const uiContext: AppContext = {
     get busy() { return busy; }, set busy(value) { busy = value; },
     get draft() { return draft; }, set draft(value) { draft = value; },
     get aborter() { return aborter; }, set aborter(value) { aborter = value; },
-    get engine() { return engine; }, history, scenes: history, managed, drainRecovery, applyDocument, switchScene, current, toast, change, changed, extendDuration, selectEntity, renderPanels, renderSidebar, renderInspector, renderTimeline, renderCameras, updateTimeUI, seek, saveProject, showModal, closeModal, projectDialog, roomDialog, sceneDialog, createNew, makeCamera, startPath, finishPath, cancelPath, replaceAction, deleteDialog, deleteEntity, seatDialog, seatApply, snapshot, exportDialog, startExport, helpDialog, updateExportSummary, setView, addAsset, addGroundPoint, retimePath, applyField, applyMotion, applyFraming, act
+    get engine() { return engine; }, history, scenes: history, managed, drainRecovery, leaveManagedForSwitch, confirmDiscardEdits, applyDocument, switchScene, current, toast, change, changed, extendDuration, selectEntity, renderPanels, renderSidebar, renderInspector, renderTimeline, renderCameras, updateTimeUI, seek, saveProject, showModal, closeModal, projectDialog, roomDialog, sceneDialog, createNew, makeCamera, startPath, finishPath, cancelPath, replaceAction, deleteDialog, deleteEntity, seatDialog, seatApply, snapshot, exportDialog, startExport, helpDialog, updateExportSummary, setView, addAsset, addGroundPoint, retimePath, applyField, applyMotion, applyFraming, act
 };
 const editingTools = createEditingTools(uiContext);
 bindEvents(uiContext);
@@ -343,17 +393,31 @@ requestAnimationFrame(frame);
  * succeed; failures keep the empty editor and surface the project library instead of loading
  * stale recovery data. Unmanaged sessions keep the original recovery behavior untouched. */
 async function startupRestore() {
-    if (managed.available) {
+    if (!managed.available) { legacyRecover(); return; }
+    // F08: the editor is busy from BEFORE the bootstrap read — the persisted choice must be
+    // resolved without concurrent edits, no matter which branch the startup takes.
+    busy = true; playing = false; updateTimeUI();
+    let fallbackToLegacy = false;
+    try {
         let boot: Awaited<ReturnType<ManagedProjectController['bootstrap']>> = null;
         try { boot = await managed.bootstrap(); }
-        catch (error) { toast(`项目库初始化失败：${(error as Error).message}`, true); }
+        catch (error) {
+            // R6: an unknown persisted choice must not fall back to legacy recovery — stale
+            // pre-DSK-004 data could resurrect over the managed project. Surface and stop.
+            toast(`项目库初始化失败：${(error as Error).message}；本次启动不读取旧自动恢复数据，可通过项目库重试`, true);
+            $('#save-status').textContent = '项目库初始化失败';
+            return;
+        }
         if (boot?.mode === 'managed' && boot.projectId) {
             try {
                 const session = await managed.open(boot.projectId);
                 if (!session.current) throw Error('该项目还没有保存的快照');
                 const { document } = await managed.download();
                 await prepareDocumentModels(engine.externalModels, document);
-                if (busy || history.pending || draft) throw Error('启动期间编辑器忙');
+                // F08: the whole startup load holds busy and verifies nothing moved underneath
+                // before committing the document, the identity or the clean flag.
+                if (history.pending || draft) throw Error('启动期间编辑器忙');
+                if (managed.epoch !== 0 || revision !== 0) throw Error('启动期间工程已变化，请重启应用重试');
                 selectClip(null);
                 project = history.reset(document);
                 selected = history.restoredSelection!; time = 0; preview = 'program';
@@ -361,6 +425,7 @@ async function startupRestore() {
                 engine.selected = selected; engine.rebuild(project);
                 renderPanels();
                 await managed.activate();
+                if (managed.epoch !== 1 || revision !== 0) throw Error('启动期间出现新的编辑，保存状态保持未保存');
                 dirty = false;
                 $('#save-status').textContent = `受管项目：${managed.projectName}`;
                 return;
@@ -371,7 +436,15 @@ async function startupRestore() {
                 return;
             }
         }
+        // 'unmanaged' or null: an explicit/absent choice — legacy recovery keeps its semantics.
+        fallbackToLegacy = true;
+    } finally {
+        busy = false; updateTimeUI();
     }
+    if (fallbackToLegacy) legacyRecover();
+}
+
+function legacyRecover() {
     void recover().then(async p => { if (p && revision === 0) {
         await prepareDocumentModels(engine.externalModels, p);
         if (revision !== 0 || busy || history.pending || draft) { engine.externalModels.retain([project, ...history.undoStack, ...history.redoStack]); return; }

@@ -10,10 +10,17 @@ function ensureIdle(ctx: AppContext): boolean {
 }
 
 /** Managed sessions save immutable snapshots only; success clears dirty only when the editor
- * has not moved on (epoch/revision captured before the await). Uncertain commits keep dirty. */
+ * has not moved on (epoch/revision captured before the await). Uncertain commits keep dirty.
+ * F08: an unconfirmed managed state (failed post-activate compensation) never writes — the
+ * user must reopen a project from the library first. */
 async function saveManagedSnapshot(ctx: AppContext): Promise<boolean> {
     const managed = ctx.managed!;
     if (!ensureIdle(ctx)) return false;
+    if (managed.unconfirmed) {
+        documentStatus('受管状态未确认，保存被拒绝');
+        ctx.toast('受管状态未确认（此前切换失败且补偿未完成）；请在项目库中重新打开项目后再保存', true);
+        return false;
+    }
     const document = ctx.scenes.document();
     const epochAtSave = managed.epoch;
     const revisionAtSave = ctx.revision;

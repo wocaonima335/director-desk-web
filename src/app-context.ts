@@ -40,7 +40,13 @@ export interface AppContext {
     readonly managed: ManagedProjectController;
     /** Drain pending recovery writes before switching documents (cancel + settle in-flight). */
     drainRecovery(): Promise<void>;
-    applyDocument(document: SceneDocument, context: SceneContext, label: string, resetViews?: boolean): void;
+    /** R4: confirm unsaved edits, drain autosave and leave the managed session before the whole
+     * document identity changes (新建/导入). False means the switch must be cancelled and the
+     * original managed project (document, dirty state, lease) is preserved. */
+    leaveManagedForSwitch(reason: string): Promise<boolean>;
+    /** R4/R11: modal confirmation for discarding unsaved edits; false on any dismissal. */
+    confirmDiscardEdits(reason: string): Promise<boolean>;
+    applyDocument(document: SceneDocument, context: SceneContext, label: string, resetViews?: boolean, resetHistory?: boolean): void;
     switchScene(id: string, context: SceneContext): void;
     current(): Entity | undefined;
     toast(message: string, error?: boolean): void;

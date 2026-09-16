@@ -1013,7 +1013,8 @@ test('R8: node budget scan, canonical expansion cap, oversized manifest and decl
     assert.equal(status.data.revision, 0, 'refused expansion keeps the pointer unmoved');
     await svc.dispose();
 
-    // Oversized manifest: bounded read refuses files beyond 1MiB before parsing.
+    // Oversized manifest: bounded read refuses files beyond the derived 4MiB budget before
+    // parsing (F06: the budget derives from the 10000-snapshot backup maximum, not arbitrary).
     const { svc: svcB, call: callB, root: rootB } = await makeService({ label: 'r8-manifest' });
     const seeded = await seedProjectWithSnapshots(callB, 1);
     const backupRoot = freshRoot('r8-manifest-target');
@@ -1027,9 +1028,9 @@ test('R8: node budget scan, canonical expansion cap, oversized manifest and decl
     assert.equal((await callC('storage.v1.backup.create', { projectId: seeded.projectId })).ok, true);
     const backupDir = path.join(backupRoot, fs.readdirSync(backupRoot).find(name => name.startsWith('director-desk-backup-')));
     const manifestPath = path.join(backupDir, 'manifest.json');
-    fs.writeFileSync(manifestPath, Buffer.concat([fs.readFileSync(manifestPath), Buffer.alloc(2 * 1024 * 1024, 0x20)]));
+    fs.writeFileSync(manifestPath, Buffer.concat([fs.readFileSync(manifestPath), Buffer.alloc(5 * 1024 * 1024, 0x20)]));
     const oversized = await callC('storage.v1.backup.restore', {});
-    assert.equal(oversized.error.message, 'storage.v1/backup-invalid', 'manifest beyond 1MiB is refused before parsing');
+    assert.equal(oversized.error.message, 'storage.v1/backup-invalid', 'a manifest beyond the derived 4MiB budget is refused before parsing');
     svcC.dispose();
     await svcB.dispose();
 
@@ -1215,4 +1216,372 @@ test('R10: dialog-pending backups count as busy, disposed services fail fast, re
     const { createStorageService: build } = await servicePromise;
     assert.throws(() => build({ root: foreignDir, dialog: null, verifiers: { document: () => { }, canonical: () => '{}', manifest: { safeParse: () => ({ success: false }) } } }),
         error => error.reason === 'schema-unsupported');
+});
+
+// === REWORK-2 CP0 named red tests (F01-F07): each reproduces an isolated reviewer finding
+// against the UNFIXED code and must be red now, green only after the corresponding fix. ===
+
+test('REWORK2 F01 red: altered CHECK constraint is currently accepted (must refuse, bytes intact)', async () => {
+    const { openLibrary } = await libraryPromise;
+    const root = freshRoot('f01-check');
+    const file = path.join(root, 'library.sqlite');
+    makeRawDb(file, raw => {
+        raw.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, fingerprint TEXT NOT NULL, applied_at TEXT NOT NULL);
+CREATE TABLE projects (
+  project_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0,
+  current_snapshot_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE snapshots (
+  project_id TEXT NOT NULL REFERENCES projects(project_id),
+  snapshot_id TEXT PRIMARY KEY,
+  revision INTEGER NOT NULL,
+  digest TEXT NOT NULL,
+  length INTEGER NOT NULL CHECK (length >= 0),
+  created_at TEXT NOT NULL,
+  UNIQUE (project_id, revision)
+);
+CREATE TABLE project_leases (
+  project_id TEXT PRIMARY KEY,
+  owner TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+CREATE TABLE app_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  mode TEXT NOT NULL,
+  project_id TEXT,
+  name TEXT,
+  updated_at TEXT NOT NULL
+);`);
+        raw.prepare('INSERT INTO schema_migrations (version, fingerprint, applied_at) VALUES (1, ?, ?)')
+            .run('dsk-storage-v1', new Date().toISOString());
+    });
+    const before = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    assert.throws(() => openLibrary({ file, now: () => Date.now() }), error => error.reason === 'schema-unsupported',
+        'an added CHECK constraint changes the v1 schema and must be refused');
+    const after = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    assert.equal(after, before, 'a refused library must keep the original bytes');
+});
+
+test('REWORK2 F01 red: dropped UNIQUE autoindex is currently accepted (must refuse)', async () => {
+    const { openLibrary } = await libraryPromise;
+    const root = freshRoot('f01-unique');
+    const file = path.join(root, 'library.sqlite');
+    makeRawDb(file, raw => {
+        raw.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, fingerprint TEXT NOT NULL, applied_at TEXT NOT NULL);
+CREATE TABLE projects (
+  project_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0,
+  current_snapshot_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE snapshots (
+  project_id TEXT NOT NULL REFERENCES projects(project_id),
+  snapshot_id TEXT PRIMARY KEY,
+  revision INTEGER NOT NULL,
+  digest TEXT NOT NULL,
+  length INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE project_leases (
+  project_id TEXT PRIMARY KEY,
+  owner TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+CREATE TABLE app_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  mode TEXT NOT NULL,
+  project_id TEXT,
+  name TEXT,
+  updated_at TEXT NOT NULL
+);`);
+        raw.prepare('INSERT INTO schema_migrations (version, fingerprint, applied_at) VALUES (1, ?, ?)')
+            .run('dsk-storage-v1', new Date().toISOString());
+    });
+    const before = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    assert.throws(() => openLibrary({ file, now: () => Date.now() }), error => error.reason === 'schema-unsupported',
+        'a dropped UNIQUE(project_id,revision) constraint must be refused');
+    assert.equal(crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'), before);
+});
+
+test('REWORK2 F02 red: a junction on projects/<id> currently writes the object outside the store', async () => {
+    const { createObjectStore } = await objectsPromise;
+    const root = freshRoot('f02-junction');
+    const outside = path.join(root, '..', `f02-target-${process.pid}`);
+    fs.rmSync(outside, { recursive: true, force: true });
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, 'sentinel.txt'), 'untouched', 'utf8');
+    try {
+        fs.mkdirSync(path.join(root, 'projects'), { recursive: true });
+        const link = path.join(root, 'projects', 'proj-junc1');
+        fs.symlinkSync(outside, link, 'junction');
+        const store = createObjectStore({ root });
+        const bytes = Buffer.from('escape payload', 'utf8');
+        await assert.rejects(() => store.putObject('proj-junc1', bytes),
+            error => error.reason === 'path-refused', 'a junctioned project directory must be refused');
+        assert.deepEqual(fs.readdirSync(outside), ['sentinel.txt'], 'nothing may be written through the junction');
+    } finally {
+        fs.rmSync(outside, { recursive: true, force: true });
+    }
+});
+
+test('REWORK2 F03 red: a backup whose project row has NULL current but non-empty snapshots currently restores', async () => {
+    const { createStorageService } = await servicePromise;
+    const contracts = await contractsPromise;
+    const { createBackupDatabase } = await libraryPromise;
+    const { createObjectStore } = await objectsPromise;
+    const root = freshRoot('f03-nullcurrent');
+    const store = createObjectStore({ root });
+    const document = await sampleDoc('review');
+    const bytes = Buffer.from(contracts.canonicalJson(document), 'utf8');
+    const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+    const snapshotId = crypto.randomUUID();
+    const sourceId = crypto.randomUUID();
+    await store.putObject(sourceId, bytes);
+    const backupRoot = freshRoot('f03-backup');
+    const backupDir = path.join(backupRoot, 'bk');
+    fs.mkdirSync(path.join(backupDir, 'objects'), { recursive: true });
+    createBackupDatabase(path.join(backupDir, 'library.sqlite'), {
+        project: { projectId: sourceId, name: 'review', revision: 1, currentSnapshotId: null, createdAt: '2026-09-16T00:00:00.000Z', updatedAt: '2026-09-16T00:00:00.000Z' },
+        snapshots: [{ snapshotId, revision: 1, digest, length: bytes.length, createdAt: '2026-09-16T00:00:00.000Z' }],
+        createdAt: '2026-09-16T00:00:00.000Z',
+    });
+    fs.writeFileSync(path.join(backupDir, 'objects', `${digest}.json`), bytes);
+    const manifest = {
+        version: 'director-desk-backup.v1', contractVersion: 'dsk.v1', sourceProjectId: sourceId,
+        name: 'review', createdAt: '2026-09-16T00:00:00.000Z',
+        snapshots: [{ snapshotId, revision: 1, digest, length: bytes.length, createdAt: '2026-09-16T00:00:00.000Z' }],
+        objects: [{ digest, length: bytes.length }],
+    };
+    fs.writeFileSync(path.join(backupDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+    const dialog = { showOpenDialog: async () => ({ canceled: false, filePaths: [backupDir] }) };
+    const svc = createStorageService({
+        root, dialog,
+        verifiers: { document: contracts.assertSceneDocument, canonical: contracts.canonicalJson, manifest: contracts.BackupManifestSchema },
+    });
+    const frame = { sender: { id: 1 }, senderFrame: { url: 'director://app/' } };
+    const restore = await svc.runInRequestContext(frame, () => svc.handlers['storage.v1.backup.restore']({}));
+    assert.equal(restore.ok, false, 'a NULL current pointer with snapshots must be rejected');
+    const list = await svc.runInRequestContext(frame, () => svc.handlers['project.list']({}));
+    assert.equal(list.data.projects.length, 0, 'a rejected restore must not register a new project');
+    await svc.dispose();
+});
+
+test('REWORK2 F04 red: two concurrent snapshot.read calls both succeed and both register transfers', async () => {
+    const { svc, call } = await makeService({ label: 'f04-download' });
+    const seeded = await seedProjectWithSnapshots(call, 1);
+    const session = seeded.sessionId;
+    const [first, second] = await Promise.all([
+        call('storage.v1.snapshot.read', { sessionId: session }),
+        call('storage.v1.snapshot.read', { sessionId: session }),
+    ]);
+    const successes = [first, second].filter(result => result.ok).length;
+    assert.equal(successes, 1, `only one download slot per frame may exist, got ${successes}`);
+    await svc.dispose();
+});
+
+test('REWORK2 F04 red: an abort racing an in-flight commit still lets the commit register', async () => {
+    const { svc, call } = await makeService({ label: 'f04-abort' });
+    const created = await call('project.create', { name: '中止竞态' });
+    const service = { call, sessionId: created.data.sessionId };
+    const document = await sampleDoc('中止竞态');
+    const bytes = Buffer.from(JSON.stringify(document), 'utf8');
+    const begin = await call('storage.v1.upload.begin', { sessionId: service.sessionId, expectedRevision: 0, declaredLength: bytes.length });
+    assert.equal(begin.ok, true);
+    const { transferId, chunkSize } = begin.data;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        const slice = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+        const chunk = await call('storage.v1.upload.chunk', { transferId, offset, data: slice.toString('base64') });
+        assert.equal(chunk.ok, true);
+    }
+    // Fire the commit, then land the abort while the commit is still awaiting its I/O.
+    const commitPromise = call('storage.v1.upload.commit', { transferId });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const abortPromise = call('storage.v1.transfer.abort', { transferId });
+    const [commit, abort] = await Promise.all([commitPromise, abortPromise]);
+    const status = await call('project.status', { projectId: created.data.projectId });
+    const revision = status.ok ? status.data.revision : -1;
+    assert.ok(!(commit.ok && abort.ok), `commit and abort must not both succeed (commit=${commit.ok}, abort=${abort.ok})`);
+    if (abort.ok) assert.equal(revision, 0, 'a successful abort must prevent the registration');
+    if (commit.ok) assert.equal(revision, 1, 'a successful commit must be the only winner');
+    await svc.dispose();
+});
+
+test('REWORK2 F04 red: a begin raced by closeFrameSessions succeeds and leaves a .part file behind', async () => {
+    const { svc, call, root } = await makeService({ label: 'f04-latebegin' });
+    const created = await call('project.create', { name: '迟到' });
+    const sessionId = created.data.sessionId;
+    const beginPromise = call('storage.v1.upload.begin', { sessionId, expectedRevision: 0, declaredLength: 16 });
+    svc.closeFrameSessions(); // the frame closes while the begin handler is mid-flight
+    const begin = await beginPromise;
+    assert.equal(begin.ok, false, `a begin whose session closed mid-flight must fail, got ${JSON.stringify(begin)}`);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const uploadsDir = path.join(root, 'uploads');
+    const leftovers = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir).filter(name => name.endsWith('.part')) : [];
+    assert.deepEqual(leftovers, [], 'no .part file may survive a closed frame');
+    await svc.dispose();
+});
+
+test('REWORK2 F05 red: a 65MiB object with declared length 8450 is fully read before the length check', async () => {
+    const { createObjectStore } = await objectsPromise;
+    const root = freshRoot('f05-bounded');
+    const store = createObjectStore({ root });
+    const projectId = 'proj-f05';
+    const oversized = Buffer.alloc(68157440, 0x41); // 65 MiB of payload behind a tiny declaration
+    const digest = crypto.createHash('sha256').update(oversized).digest('hex');
+    const dir = path.join(root, 'projects', projectId, 'objects');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${digest}.json`), oversized);
+    const error = await store.getObject(projectId, digest, 8450).catch(e => e);
+    assert.equal(error.reason, 'corrupt-object');
+    assert.equal(typeof store._lastReadBytes, 'number', 'the store must report how many bytes it actually read');
+    assert.ok(store._lastReadBytes <= 8450 + 1, `the read must be bounded by the declared length, read ${store._lastReadBytes}`);
+});
+
+test('REWORK2 F06: 5000 AND 10000-snapshot self-produced backups round-trip (derived manifest budget)', async () => {
+    const { createStorageService } = await servicePromise;
+    const contracts = await contractsPromise;
+    const libraryBundle = await libraryPromise;
+    const { createObjectStore } = await objectsPromise;
+    for (const snapshotCount of [5000, 10000]) {
+        const root = freshRoot(`f06-many-${snapshotCount}`);
+        const store = createObjectStore({ root });
+        const document = await sampleDoc('many');
+        const bytes = Buffer.from(contracts.canonicalJson(document), 'utf8');
+        const projectId = crypto.randomUUID();
+        const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+        await store.putObject(projectId, bytes);
+        const db = libraryBundle.openLibrary({ file: path.join(root, 'library.sqlite'), now: () => Date.now() });
+        db.restoreProject({
+            project: {
+                projectId, name: 'many', revision: snapshotCount,
+                currentSnapshotId: `snap-${String(snapshotCount).padStart(7, '0')}`,
+                createdAt: '2026-09-16T00:00:00.000Z', updatedAt: '2026-09-16T00:00:00.000Z',
+            },
+            snapshots: Array.from({ length: snapshotCount }, (_, index) => ({
+                snapshotId: `snap-${String(index + 1).padStart(7, '0')}`,
+                revision: index + 1, digest, length: bytes.length, createdAt: '2026-09-16T00:00:00.000Z',
+            })),
+        });
+        const chosenRoot = freshRoot(`f06-backups-${snapshotCount}`);
+        fs.mkdirSync(chosenRoot, { recursive: true });
+        let dialogTarget = chosenRoot;
+        const dialog = { showOpenDialog: async () => ({ canceled: false, filePaths: [dialogTarget] }) };
+        const svc = createStorageService({
+            root, library: db, objects: store, dialog,
+            verifiers: { document: contracts.assertSceneDocument, canonical: contracts.canonicalJson, manifest: contracts.BackupManifestSchema },
+        });
+        const frame = { sender: { id: 1 }, senderFrame: { url: 'director://app/' } };
+        const call = (action, data) => svc.runInRequestContext(frame, () => svc.handlers[action](data));
+        const backup = await call('storage.v1.backup.create', { projectId });
+        assert.equal(backup.ok, true, `${snapshotCount}: ${JSON.stringify(backup.error ?? {})}`);
+        assert.equal(backup.data.snapshots, snapshotCount);
+        const createdDir = fs.readdirSync(chosenRoot).find(name => name.startsWith('director-desk-backup-'));
+        assert.ok(createdDir, `${snapshotCount}: the backup directory must exist`);
+        const manifestBytes = fs.statSync(path.join(chosenRoot, createdDir, 'manifest.json')).size;
+        assert.ok(manifestBytes <= 4 * 1024 * 1024, `${snapshotCount}: the self-produced manifest must stay within the derived budget (${manifestBytes} bytes)`);
+        dialogTarget = path.join(chosenRoot, createdDir);
+        const restore = await call('storage.v1.backup.restore', {});
+        assert.equal(restore.ok, true, `${snapshotCount}: a self-produced ${manifestBytes}-byte manifest must restore, got ${JSON.stringify(restore.error ?? {})}`);
+        assert.equal(restore.data.snapshots, snapshotCount);
+        assert.equal(restore.data.revision, snapshotCount);
+        await svc.dispose();
+        db.close();
+    }
+});
+
+test('REWORK2 V: a revision-2 commit landing mid-backup cannot leak into the revision-1 backup view', async () => {
+    const { createStorageService } = await servicePromise;
+    const contracts = await contractsPromise;
+    const root = freshRoot('v-concurrent');
+    const targetRoot = freshRoot('v-concurrent-target');
+    fs.mkdirSync(targetRoot, { recursive: true });
+    let releaseDialog = () => { };
+    const dialog = { showOpenDialog: () => new Promise(resolve => { releaseDialog = () => resolve({ canceled: false, filePaths: [targetRoot] }); }) };
+    const svc = createStorageService({
+        root, dialog,
+        verifiers: { document: contracts.assertSceneDocument, canonical: contracts.canonicalJson, manifest: contracts.BackupManifestSchema },
+    });
+    const frame = { sender: { id: 1 }, senderFrame: { url: 'director://app/' } };
+    const call = (action, data) => svc.runInRequestContext(frame, () => svc.handlers[action](data));
+    const created = await call('project.create', { name: '并发' });
+    const uploader = { call, sessionId: created.data.sessionId };
+    const doc1 = await sampleDoc('版本1');
+    const first = await uploadDocument(uploader, doc1, {});
+    assert.equal(first.ok, true, JSON.stringify(first.error ?? {}));
+    const revision1Digest = first.data.snapshot.digest;
+    // Start the backup: its consistent view is taken before the (gated) dialog resolves.
+    const backupPromise = call('storage.v1.backup.create', { projectId: created.data.projectId });
+    await new Promise(resolve => setTimeout(resolve, 80));
+    // Revision 2 commits while the backup waits on the native dialog.
+    const doc2 = await sampleDoc('版本2');
+    const second = await uploadDocument(uploader, doc2, { expectedRevision: 1 });
+    assert.equal(second.ok, true, `the concurrent commit must succeed: ${JSON.stringify(second.error ?? {})}`);
+    assert.equal(second.data.revision, 2);
+    releaseDialog();
+    const backup = await backupPromise;
+    assert.equal(backup.ok, true, JSON.stringify(backup.error ?? {}));
+    assert.equal(backup.data.snapshots, 1, 'the backup must contain exactly the revision-1 view');
+    const backupDir = path.join(targetRoot, fs.readdirSync(targetRoot).find(name => name.startsWith('director-desk-backup-')));
+    const restoreSvc = createStorageService({
+        root: freshRoot('v-concurrent-restore'), dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [backupDir] }) },
+        verifiers: { document: contracts.assertSceneDocument, canonical: contracts.canonicalJson, manifest: contracts.BackupManifestSchema },
+    });
+    const restoreFrame = { sender: { id: 9 }, senderFrame: { url: 'director://app/' } };
+    const restore = await restoreSvc.runInRequestContext(restoreFrame, () => restoreSvc.handlers['storage.v1.backup.restore']({}));
+    assert.equal(restore.ok, true, JSON.stringify(restore.error ?? {}));
+    assert.equal(restore.data.revision, 1, 'the restored project must be the revision-1 view');
+    const restoredStatus = await restoreSvc.runInRequestContext(restoreFrame, () => restoreSvc.handlers['project.status']({ projectId: restore.data.projectId }));
+    assert.equal(restoredStatus.data.current.digest, revision1Digest, 'the restored current snapshot must be the revision-1 bytes');
+    await restoreSvc.dispose();
+    await svc.dispose();
+});
+
+test('REWORK2 F07 red: a receipt read failure after a proven commit is reported as storage-unavailable', async () => {
+    const { createStorageService } = await servicePromise;
+    const contracts = await contractsPromise;
+    const libraryBundle = await libraryPromise;
+    const root = freshRoot('f07-receipt');
+    const lib = libraryBundle.openLibrary({ file: path.join(root, 'library.sqlite'), now: () => Date.now() });
+    let committed = false;
+    let receiptFails = false;
+    const wrapped = {
+        ...lib,
+        commitSnapshot(...args) { committed = true; return lib.commitSnapshot(...args); },
+        getProject(...args) {
+            if (committed && receiptFails) throw Object.assign(Error('receipt read failure'), { reason: 'storage-unavailable' });
+            return lib.getProject(...args);
+        },
+    };
+    const svc = createStorageService({
+        root, library: wrapped, dialog: null,
+        verifiers: { document: contracts.assertSceneDocument, canonical: contracts.canonicalJson, manifest: contracts.BackupManifestSchema },
+    });
+    const frame = { sender: { id: 1 }, senderFrame: { url: 'director://app/' } };
+    const call = (action, data) => svc.runInRequestContext(frame, () => svc.handlers[action](data));
+    const created = await call('project.create', { name: '回执' });
+    const service = { call, sessionId: created.data.sessionId };
+    const bytes = Buffer.from(JSON.stringify(await sampleDoc('回执')), 'utf8');
+    const begin = await call('storage.v1.upload.begin', { sessionId: service.sessionId, expectedRevision: 0, declaredLength: bytes.length });
+    assert.equal(begin.ok, true);
+    const { transferId, chunkSize } = begin.data;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        const slice = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+        const chunk = await call('storage.v1.upload.chunk', { transferId, offset, data: slice.toString('base64') });
+        assert.equal(chunk.ok, true);
+    }
+    receiptFails = true; // the getProject receipt read fails right after the real commit
+    const commit = await call('storage.v1.upload.commit', { transferId });
+    assert.equal(commit.ok, true, `a proven commit must answer success, got ${JSON.stringify(commit.error ?? {})}`);
+    assert.equal(commit.data.revision, 1);
+    assert.equal(lib.getProject(created.data.projectId).revision, 1, 'the commit must have landed exactly once');
+    await svc.dispose();
+    lib.close();
 });

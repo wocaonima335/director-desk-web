@@ -70,12 +70,20 @@ function toBase64(bytes: Uint8Array): string {
 export class ManagedProjectController {
     /** none: 未选择；managed: 显式确认的受管会话；unmanaged: 显式离开后的普通会话。 */
     identity: 'none' | 'managed' | 'unmanaged' = 'none';
+    // F08: the flat fields below are the COMMITTED (active) binding. Staged switches live in
+    // `candidate` until activate() promotes them, so a failed open/create can never disturb the
+    // active session, its lease or the document identity.
     sessionId: string | null = null;
     projectId: string | null = null;
     projectName: string | null = null;
     revision = 0;
     current: SnapshotRefShape | null = null;
     leaseOwned = false;
+    /** The in-flight switch target staged by open()/create(); null when nothing is in flight. */
+    candidate: SessionBinding | null = null;
+    /** F08: explicit unconfirmed state — set when a post-activate failure could not be
+     * compensated; blocks snapshot writes until the user reopens a project explicitly. */
+    unconfirmed = false;
     /** Bumped by the editor whenever the whole document is replaced; async flows compare it. */
     epoch = 0;
 
@@ -96,17 +104,33 @@ export class ManagedProjectController {
         return data;
     }
 
+    /** F09: the active session itself can serve a same-project reopen — no close, no new lease.
+     * Returns the reusable binding, or null when the target differs / nothing is active /
+     * the lease was lost / a switch is already in flight. */
+    reuseActiveSession(projectId: string): SessionBinding | null {
+        if (this.identity !== 'managed' || this.candidate || !this.sessionId) return null;
+        if (projectId !== this.projectId || !this.leaseOwned) return null;
+        return {
+            sessionId: this.sessionId, projectId: this.projectId!, projectName: this.projectName,
+            revision: this.revision, current: this.current, leaseOwned: this.leaseOwned,
+        };
+    }
+
+    /** Stage a candidate session for a project. The active binding is NOT touched; download and
+     * first saves run against the candidate until activate() commits the switch. */
+    private stageCandidate(data: StorageSessionShape) {
+        this.candidate = {
+            sessionId: data.sessionId, projectId: data.projectId, projectName: data.name,
+            revision: data.revision, current: data.current, leaseOwned: data.leaseOwned,
+        };
+    }
+
     /** Open a project session and try to own its write lease. Does NOT confirm identity. */
     async open(projectId: string): Promise<StorageSessionShape> {
         const result = await this.call!('project.open', { projectId });
         if (!result.ok) throw new StorageRequestError(result.error);
         const data = result.data as StorageSessionShape;
-        this.sessionId = data.sessionId;
-        this.projectId = data.projectId;
-        this.projectName = data.name;
-        this.revision = data.revision;
-        this.current = data.current;
-        this.leaseOwned = data.leaseOwned;
+        this.stageCandidate(data);
         return data;
     }
 
@@ -115,31 +139,71 @@ export class ManagedProjectController {
         const result = await this.call!('project.create', { name });
         if (!result.ok) throw new StorageRequestError(result.error);
         const data = result.data as StorageSessionShape;
-        this.sessionId = data.sessionId;
-        this.projectId = data.projectId;
-        this.projectName = data.name;
-        this.revision = data.revision;
-        this.current = data.current;
-        this.leaseOwned = data.leaseOwned;
+        this.stageCandidate(data);
         return data;
     }
 
-    /** Confirm the managed identity AFTER the document was downloaded, verified and prepared. */
+    /** Confirm the managed identity AFTER the document was downloaded, verified and prepared.
+     * F08: the activation receipt promotes the candidate to the active binding atomically — the
+     * caller re-checks epoch/revision afterwards and compensates through compensateTo() if the
+     * document can no longer be applied. */
     async activate(): Promise<void> {
-        const result = await this.call!('storage.v1.session.activate', { sessionId: this.sessionId });
+        const sessionId = this.candidate?.sessionId ?? this.sessionId;
+        if (!sessionId) throw new StorageRequestError({ code: 'ACTION_FAILED', message: 'storage.v1/unknown-session', details: ['没有可激活的会话'] });
+        const result = await this.call!('storage.v1.session.activate', { sessionId });
         if (!result.ok) throw new StorageRequestError(result.error);
+        const promoted = this.candidate;
+        if (promoted) {
+            this.sessionId = promoted.sessionId;
+            this.projectId = promoted.projectId;
+            this.projectName = promoted.projectName;
+            this.revision = promoted.revision;
+            this.current = promoted.current;
+            this.leaseOwned = promoted.leaseOwned;
+            this.candidate = null;
+        }
         this.identity = 'managed';
+        this.unconfirmed = false;
+    }
+
+    /** F08 compensation: after activate succeeded but the document could not be applied, restore
+     * the persisted choice to `previous` (managed project or unmanaged). Throws on failure — the
+     * caller must then mark the state unconfirmed instead of guessing. */
+    async compensateTo(previous: SessionBinding | null): Promise<void> {
+        try {
+            if (previous) {
+                const result = await this.call!('storage.v1.session.activate', { sessionId: previous.sessionId });
+                if (!result.ok) throw new StorageRequestError(result.error);
+                this.restoreBinding(previous);
+                this.identity = 'managed';
+            } else {
+                const sessionId = this.candidate?.sessionId ?? this.sessionId;
+                if (sessionId) {
+                    const result = await this.call!('storage.v1.session.leave', { sessionId });
+                    if (!result.ok) throw new StorageRequestError(result.error);
+                }
+                this.resetSession();
+                this.identity = 'unmanaged';
+            }
+            this.candidate = null;
+        } catch (error) {
+            // Compensation failed: leave an explicit unconfirmed state; never guess a binding.
+            this.unconfirmed = true;
+            throw error;
+        }
     }
 
     /** Explicit leave: clears the persisted managed choice and closes the session. */
     async leave(): Promise<void> {
-        const result = await this.call!('storage.v1.session.leave', { sessionId: this.sessionId });
+        const sessionId = this.candidate?.sessionId ?? this.sessionId;
+        if (!sessionId) throw new StorageRequestError({ code: 'ACTION_FAILED', message: 'storage.v1/unknown-session', details: ['没有可离开的会话'] });
+        const result = await this.call!('storage.v1.session.leave', { sessionId });
         if (!result.ok) throw new StorageRequestError(result.error);
         this.resetSession();
         this.identity = 'unmanaged';
     }
 
-    /** Close the current session (releases the lease); the persisted choice is untouched. */
+    /** Close the active session (releases the lease); the persisted choice is untouched. */
     async closeSession(): Promise<void> {
         if (!this.sessionId) return;
         const result = await this.call!('storage.v1.project.close', { sessionId: this.sessionId });
@@ -147,10 +211,11 @@ export class ManagedProjectController {
         this.resetSession();
     }
 
-    /** Close an arbitrary session by id (used to release a failed switch target or an old session). */
+    /** Close an arbitrary session by id; drops a matching candidate or the active binding. */
     async closeSessionById(sessionId: string): Promise<void> {
         const result = await this.call!('storage.v1.project.close', { sessionId });
         if (!result.ok) throw new StorageRequestError(result.error);
+        if (this.candidate?.sessionId === sessionId) this.candidate = null;
         if (this.sessionId === sessionId) this.resetSession();
     }
 
@@ -173,10 +238,12 @@ export class ManagedProjectController {
         this.leaseOwned = session.leaseOwned;
     }
 
-    /** Download and validate a registered snapshot (current one when no id is given). */
+    /** Download and validate a registered snapshot (current one when no id is given).
+     * F08: targets the staged candidate when a switch is in flight, else the active session. */
     async download(snapshotId?: string): Promise<{ document: SceneDocument; snapshot: SnapshotRefShape }> {
+        const sessionId = this.candidate?.sessionId ?? this.sessionId;
         const result = await this.call!('storage.v1.snapshot.read', {
-            sessionId: this.sessionId, ...(snapshotId ? { snapshotId } : {}),
+            sessionId, ...(snapshotId ? { snapshotId } : {}),
         });
         if (!result.ok) throw new StorageRequestError(result.error);
         const read = result.data as { snapshot: SnapshotRefShape; transferId: string; length: number; chunkSize: number };
@@ -213,16 +280,20 @@ export class ManagedProjectController {
         return { document, snapshot: read.snapshot };
     }
 
-    /** Upload the full document as the next immutable snapshot. Never auto-retries an uncertain commit. */
+    /** Upload the full document as the next immutable snapshot. Never auto-retries an uncertain
+     * commit. F08: the first save of a staged candidate runs against the candidate session and
+     * updates the candidate binding; saves without a candidate target the active one. */
     async saveSnapshot(document: SceneDocument, name?: string): Promise<SaveOutcome> {
         const bytes = new TextEncoder().encode(JSON.stringify(document));
         if (bytes.length > STORAGE_MAX_PROJECT_BYTES) {
             return { status: 'failed', reason: 'upload-too-large', message: `工程内容超过 ${Math.floor(STORAGE_MAX_PROJECT_BYTES / 1024 / 1024)} MiB 上限，请在项目库中导出 .director 副本` };
         }
-        if (!this.sessionId) return { status: 'failed', reason: 'unknown-session', message: '没有打开的受管项目会话' };
+        const sessionId = this.candidate?.sessionId ?? this.sessionId;
+        const expectedRevision = this.candidate?.revision ?? this.revision;
+        if (!sessionId) return { status: 'failed', reason: 'unknown-session', message: '没有打开的受管项目会话' };
         const begin = await this.call!('storage.v1.upload.begin', {
-            sessionId: this.sessionId,
-            expectedRevision: this.revision,
+            sessionId,
+            expectedRevision,
             declaredLength: bytes.length,
             ...(name ? { name } : {}),
         });
@@ -241,9 +312,16 @@ export class ManagedProjectController {
                 return { status: 'failed', reason: error.reason, message: error.message };
             }
             const data = commit.data as { snapshot: SnapshotRefShape; revision: number };
-            this.revision = data.revision;
-            this.current = data.snapshot;
-            if (name) this.projectName = name;
+            const target = this.candidate;
+            if (target) {
+                target.revision = data.revision;
+                target.current = data.snapshot;
+                if (name) target.projectName = name;
+            } else {
+                this.revision = data.revision;
+                this.current = data.snapshot;
+                if (name) this.projectName = name;
+            }
             return { status: 'saved', snapshot: data.snapshot, revision: data.revision };
         } catch (error) {
             void this.call!('storage.v1.transfer.abort', { transferId });
@@ -259,5 +337,42 @@ export class ManagedProjectController {
         this.revision = 0;
         this.current = null;
         this.leaseOwned = false;
+    }
+}
+
+// --- R4/R6 document-identity switch protocol --------------------------------------------------
+// Pure decision logic for leaving a managed session before the whole document changes
+// (新建/导入). UI wiring (confirm modal, toasts, status line) stays in the callers.
+
+export type SwitchDecision =
+    | { status: 'proceed' }
+    | { status: 'cancelled'; stage: 'confirm' }
+    | { status: 'cancelled'; stage: 'leave'; error: unknown };
+
+export interface ManagedSwitchPorts {
+    /** True only while a managed session is active; otherwise nothing to leave. */
+    managedActive: boolean;
+    /** Unsaved edits that a switch would discard. */
+    dirty: boolean;
+    /** Unsaved-edits confirmation (receives the switch reason); resolving false cancels. */
+    confirmDiscard: (reason: string) => Promise<boolean>;
+    /** Drains pending/in-flight legacy autosave writes before the identity changes. */
+    drainAutosave: () => Promise<void>;
+    /** Explicit managed leave (storage.v1.session.leave via the controller). */
+    leave: () => Promise<void>;
+}
+
+/** Confirm unsaved edits, drain the autosave queue, then leave the managed session. A refused
+ * confirmation or a failed leave cancels the switch so the original document identity, dirty
+ * state and lease survive untouched. */
+export async function leaveManagedBeforeSwitch(input: ManagedSwitchPorts, reason: string): Promise<SwitchDecision> {
+    if (!input.managedActive) return { status: 'proceed' };
+    if (input.dirty && !await input.confirmDiscard(reason)) return { status: 'cancelled', stage: 'confirm' };
+    try {
+        await input.drainAutosave();
+        await input.leave();
+        return { status: 'proceed' };
+    } catch (error) {
+        return { status: 'cancelled', stage: 'leave', error };
     }
 }

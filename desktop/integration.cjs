@@ -105,8 +105,8 @@ function attachIntegration(window) {
             return { ok: true, data: result };
         } catch (e) { return { ok: false, error: e.message }; }
     });
-    window.webContents.on('did-start-loading', () => { ready = false; host.stop(); storage.closeFrameSessions(); for (const task of pending.values()) { clearTimeout(task.timer); task.resolve({ ok: false, execution: 'unknown', error: '页面重新载入，调用结果未确认；请重新读取工程，不要直接重复写入' }); } pending.clear(); });
-    window.on('closed', () => { host.stop(); void mcp.close(); storage.dispose(); for (const task of pending.values()) { clearTimeout(task.timer); task.resolve({ ok: false, execution: 'unknown', error: '软件已关闭，调用结果未确认；请重新读取工程，不要直接重复写入' }); }
+    window.webContents.on('did-start-loading', () => { ready = false; host.stop(); void Promise.resolve(storage.closeFrameSessions()).catch(() => { }); for (const task of pending.values()) { clearTimeout(task.timer); task.resolve({ ok: false, execution: 'unknown', error: '页面重新载入，调用结果未确认；请重新读取工程，不要直接重复写入' }); } pending.clear(); });
+    window.on('closed', () => { host.stop(); void mcp.close(); void Promise.resolve(storage.dispose()).catch(() => { }); for (const task of pending.values()) { clearTimeout(task.timer); task.resolve({ ok: false, execution: 'unknown', error: '软件已关闭，调用结果未确认；请重新读取工程，不要直接重复写入' }); }
         ipcMain.removeHandler('director-host'); ipcMain.removeHandler('director-dsk'); ipcMain.removeListener('director-tool-result', resultHandler); ipcMain.removeListener('director-tools-ready', readyHandler); });
     return { isBusy: () => host.isRunning() || skillHost.isBusy() || pending.size > 0 || storage.isBusy() };
 }

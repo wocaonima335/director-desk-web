@@ -4,7 +4,7 @@
 // No real DOM: only a minimal document/window shim for the status helpers in project-save.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ManagedProjectController, StorageRequestError, type DskReply, type DskCaller } from '../src/editor/managed-project.ts';
+import { ManagedProjectController, StorageRequestError, leaveManagedBeforeSwitch, type DskReply, type DskCaller } from '../src/editor/managed-project.ts';
 import { RecoveryAutosave } from '../src/editor/recovery-autosave.ts';
 import { canonicalJson } from '../shared/storage/canonical.ts';
 import { readSceneDocument, type SceneDocument } from '../src/scenes/sequence-project.ts';
@@ -53,18 +53,24 @@ test('saveSnapshot uploads ordered base64 chunks and updates revision only on su
             return OK({ received: payload.offset + expected.length });
         }
         if (action === 'storage.v1.upload.commit') return OK({ snapshot: ref, revision: 1 });
+        if (action === 'storage.v1.session.activate') return OK({ mode: 'managed', sessionId: (data as { sessionId: string }).sessionId, projectId: 'proj-0001' });
         throw Error('unexpected action ' + action);
     };
     const controller = new ManagedProjectController(dsk);
     await controller.create('保存');
     const outcome = await controller.saveSnapshot(document);
     assert.equal(outcome.status, 'saved');
-    assert.equal(controller.revision, 1);
-    assert.equal(controller.current?.snapshotId, 'snap-0001');
+    // F08: a first save without activate() updates the staged candidate, not the active binding.
+    assert.equal(controller.candidate?.revision, 1);
+    assert.equal(controller.candidate?.current?.snapshotId, 'snap-0001');
+    assert.equal(controller.revision, 0, 'the active binding is untouched before activation');
+    await controller.activate();
+    assert.equal(controller.revision, 1, 'activate promotes the candidate revision');
     const actions = log.map(entry => entry.action);
     assert.equal(actions[0], 'project.create');
     assert.equal(actions[1], 'storage.v1.upload.begin');
-    assert.equal(actions[actions.length - 1], 'storage.v1.upload.commit');
+    assert.equal(actions[actions.length - 2], 'storage.v1.upload.commit');
+    assert.equal(actions[actions.length - 1], 'storage.v1.session.activate');
     const expectedChunks = Math.ceil(bytes.length / 1024);
     assert.equal(actions.filter(name => name === 'storage.v1.upload.chunk').length, expectedChunks);
     assert.deepEqual(actions.slice(2, 2 + expectedChunks), actions.slice(2, -1).filter(name => name === 'storage.v1.upload.chunk'));
@@ -103,8 +109,10 @@ test('uncertain commit keeps revision unchanged so the renderer keeps dirty stat
     await controller.open('proj-0001');
     const outcome = await controller.saveSnapshot(makeDocument('回执'));
     assert.equal(outcome.status, 'outcome-unknown');
-    assert.equal(controller.revision, 1, 'uncertain outcome must not advance the local revision');
-    assert.equal(controller.current, null);
+    // F08: the open is staged; an uncertain commit must not advance the candidate revision.
+    assert.equal(controller.candidate?.revision, 1);
+    assert.equal(controller.candidate?.current, null);
+    assert.equal(controller.revision, 0, 'the active binding stays untouched');
 });
 
 test('failed upload aborts the transfer', async () => {
@@ -236,6 +244,133 @@ test('managed mode disables recovery writes; unmanaged keeps them; drain settles
     release();
     await drained;
     assert.equal(writes, 2);
+});
+
+// --- REWORK-2 CP2 named red tests (F08/F09/F10): red against the unfixed renderer -------------
+
+test('REWORK2 F08 red: open stages a candidate and must not touch the active binding', async () => {
+    const openedSessions: string[] = [];
+    const controller = new ManagedProjectController((async (action, data) => {
+        if (action === 'project.open') {
+            const payload = data as { projectId: string };
+            openedSessions.push(payload.projectId);
+            if (payload.projectId === 'proj-a') return OK({ sessionId: 'sess-a', projectId: 'proj-a', name: 'A', revision: 2, current: null, leaseOwned: true, leaseBusy: false });
+            return OK({ sessionId: 'sess-b', projectId: 'proj-b', name: 'B', revision: 5, current: null, leaseOwned: true, leaseBusy: false });
+        }
+        if (action === 'storage.v1.snapshot.read') {
+            const payload = data as { sessionId: string };
+            const bytes = new TextEncoder().encode(JSON.stringify(makeDocument('候选')));
+            return OK({ snapshot: { version: 'dsk.v1', snapshotId: 'snap-x', projectId: payload.sessionId === 'sess-b' ? 'proj-b' : 'proj-a', revision: 1, digest: 'a'.repeat(64), createdAt: '2026-09-16T00:00:00Z' }, transferId: `dl-${payload.sessionId}`, length: bytes.length, chunkSize: 65536, chunks: 1 });
+        }
+        if (action === 'storage.v1.snapshot.download.chunk') {
+            const bytes = new TextEncoder().encode(JSON.stringify(makeDocument('候选')));
+            return OK({ offset: 0, data: Buffer.from(bytes).toString('base64'), final: true });
+        }
+        if (action === 'storage.v1.session.activate') return OK({ mode: 'managed', sessionId: (data as { sessionId: string }).sessionId, projectId: 'proj-b' });
+        throw Error('unexpected action ' + action);
+    }) as DskCaller);
+    // Bind A as the ACTIVE session, then stage an open of B.
+    controller.restoreBinding({ sessionId: 'sess-a', projectId: 'proj-a', projectName: 'A', revision: 2, current: null, leaseOwned: true });
+    controller.identity = 'managed';
+    await controller.open('proj-b');
+    assert.equal(controller.sessionId, 'sess-a', 'the active binding must survive a staged open');
+    assert.equal(controller.projectId, 'proj-a');
+    assert.equal(controller.revision, 2);
+    const { snapshot } = await controller.download();
+    assert.equal(snapshot.projectId, 'proj-b', 'the download must target the candidate session');
+    await controller.activate();
+    assert.equal(controller.sessionId, 'sess-b', 'activate promotes the candidate to active');
+    assert.equal(controller.revision, 5);
+    assert.equal(controller.identity, 'managed');
+});
+
+test('REWORK2 F08 red: a failed create must leave the active binding alone (no restore dance needed)', async () => {
+    const controller = new ManagedProjectController((async action => {
+        if (action === 'project.create') return FAIL('io-failure', '创建失败');
+        throw Error('unexpected action ' + action);
+    }) as DskCaller);
+    controller.restoreBinding({ sessionId: 'sess-a', projectId: 'proj-a', projectName: 'A', revision: 1, current: null, leaseOwned: true });
+    controller.identity = 'managed';
+    await assert.rejects(() => controller.create('B'));
+    assert.equal(controller.candidate, null, 'a failed create leaves no candidate');
+    assert.equal(controller.sessionId, 'sess-a', 'the active binding is untouched');
+});
+
+test('REWORK2 F09 red: same-project reopen reuses the active session without closing it', async () => {
+    const actions: string[] = [];
+    const controller = new ManagedProjectController((async action => {
+        actions.push(action);
+        if (action === 'storage.v1.project.close') return OK({ closed: true });
+        throw Error('unexpected action ' + action);
+    }) as DskCaller);
+    controller.restoreBinding({ sessionId: 'sess-a', projectId: 'proj-a', projectName: 'A', revision: 3, current: null, leaseOwned: true });
+    controller.identity = 'managed';
+    const reuse = controller.reuseActiveSession('proj-a');
+    assert.ok(reuse, 'a valid active session on the same project must be reusable');
+    assert.equal(reuse!.sessionId, 'sess-a');
+    assert.equal(controller.reuseActiveSession('proj-other'), null, 'a different project is not reusable');
+    controller.leaseOwned = false;
+    assert.equal(controller.reuseActiveSession('proj-a'), null, 'a lost lease is not reusable');
+    assert.ok(!actions.includes('storage.v1.project.close'), 'reuse must not close anything');
+});
+
+test('REWORK2 F08 red: an unconfirmed managed state must not snapshot-write and keeps dirty', async () => {
+    const harness = makeSaveHarness({ status: 'saved', snapshot: { version: 'dsk.v1' }, revision: 6 });
+    (harness.managed as unknown as { saveSnapshot: () => Promise<unknown> }).saveSnapshot = async () => {
+        throw Error('saveSnapshot must not be called while unconfirmed');
+    };
+    (harness.managed as unknown as { unconfirmed: boolean }).unconfirmed = true;
+    assert.equal(await saveProjectFile(harness.ctx), false);
+    assert.equal(harness.ctx.dirty, true, 'an unconfirmed state must not clear dirty');
+});
+
+test('R4 switch protocol: a refused dirty confirmation cancels before any drain or leave', async () => {
+    let confirmReason = '', drains = 0, leaves = 0;
+    const decision = await leaveManagedBeforeSwitch({
+        managedActive: true, dirty: true,
+        confirmDiscard: async reason => { confirmReason = reason; return false; },
+        drainAutosave: async () => { drains++; },
+        leave: async () => { leaves++; },
+    }, '新建工程');
+    assert.equal(confirmReason, '新建工程');
+    assert.deepEqual(decision, { status: 'cancelled', stage: 'confirm' });
+    assert.equal(drains, 0, 'a refused confirmation must not drain autosave');
+    assert.equal(leaves, 0, 'a refused confirmation must not leave the session');
+});
+
+test('R4 switch protocol: an inactive session proceeds without confirmation', async () => {
+    let confirms = 0, leaves = 0;
+    const decision = await leaveManagedBeforeSwitch({
+        managedActive: false, dirty: true,
+        confirmDiscard: async () => { confirms++; return true; },
+        drainAutosave: async () => { },
+        leave: async () => { leaves++; },
+    }, '导入新工程');
+    assert.deepEqual(decision, { status: 'proceed' });
+    assert.equal(confirms, 0, 'an inactive managed session needs no dirty confirmation');
+    assert.equal(leaves, 0, 'an inactive managed session must not call leave');
+});
+
+test('R4 switch protocol: autosave drains before leave; a failed leave cancels with the error', async () => {
+    const order: string[] = [];
+    const boom = Error('storage.v1/storage-unavailable');
+    const cancelled = await leaveManagedBeforeSwitch({
+        managedActive: true, dirty: false,
+        confirmDiscard: async () => { order.push('confirm'); return true; },
+        drainAutosave: async () => { order.push('drain'); },
+        leave: async () => { order.push('leave'); throw boom; },
+    }, '新建工程');
+    assert.deepEqual(order, ['drain', 'leave'], 'autosave must be drained before leaving');
+    assert.deepEqual(cancelled, { status: 'cancelled', stage: 'leave', error: boom });
+    order.length = 0;
+    const proceed = await leaveManagedBeforeSwitch({
+        managedActive: true, dirty: false,
+        confirmDiscard: async () => true,
+        drainAutosave: async () => { order.push('drain'); },
+        leave: async () => { order.push('leave'); },
+    }, '新建工程');
+    assert.deepEqual(proceed, { status: 'proceed' });
+    assert.deepEqual(order, ['drain', 'leave']);
 });
 
 // --- project-save dirty rules (minimal document/window shim, no real DOM) ---------------------

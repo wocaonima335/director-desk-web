@@ -50,6 +50,29 @@ CREATE TABLE app_state (
 );
 `;
 
+// Backup databases carry ONLY the necessary project/snapshot/version schema (no leases, no
+// app_state, no triggers or views) so a restore can whitelist the exact structure.
+const BACKUP_DDL = `
+CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, fingerprint TEXT NOT NULL, applied_at TEXT NOT NULL);
+CREATE TABLE projects (
+  project_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0,
+  current_snapshot_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE snapshots (
+  project_id TEXT NOT NULL REFERENCES projects(project_id),
+  snapshot_id TEXT PRIMARY KEY,
+  revision INTEGER NOT NULL,
+  digest TEXT NOT NULL,
+  length INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (project_id, revision)
+);
+`;
+
 // Exact v1 structure. Order, type, NOT NULL and PK must match pragma table_info verbatim.
 const EXPECTED_TABLES = {
     schema_migrations: [
@@ -98,7 +121,35 @@ function normalizeType(type) {
     return String(type ?? '').toUpperCase();
 }
 
-/** Read-only structural verification against the exact expected v1 shape (R1). */
+/** Formatting-independent table text: whitespace collapses, then spaces around parens/commas
+ * are removed. Two semantically identical CREATE statements stay comparable no matter which
+ * whitespace style authored them, while any CHECK/DEFAULT/UNIQUE/FK/column change survives
+ * normalization and still differs (F01). */
+function normalizeSql(sql) {
+    return String(sql ?? '').replace(/\s+/g, ' ').trim().replace(/\s*([(),])\s*/g, '$1');
+}
+
+/** Derive the per-table CREATE statements from the same DDL that builds v1, so the identity
+ * check (F01) can never drift from the schema it verifies: UNIQUE/CHECK/FK/DEFAULT all live in
+ * the stored sqlite_master.sql text and any tampering changes it. */
+function expectedTableSql(ddl) {
+    const map = {};
+    for (const match of ddl.matchAll(/CREATE TABLE (\w+) \([^;]*?\);/g)) {
+        // sqlite_master stores the statement WITHOUT its trailing semicolon.
+        map[match[1]] = normalizeSql(match[0].replace(/;\s*$/, ''));
+    }
+    return map;
+}
+const EXPECTED_TABLE_SQL = expectedTableSql(SCHEMA_DDL);
+const BACKUP_TABLE_SQL = expectedTableSql(BACKUP_DDL);
+
+// Automatic indexes created BY our own constraints (F01): a TEXT PRIMARY KEY or UNIQUE creates
+// one sqlite_autoindex; INTEGER PRIMARY KEY creates none. Any other count means altered constraints.
+const EXPECTED_AUTO_INDEXES = {
+    schema_migrations: 0, projects: 1, snapshots: 2, project_leases: 1, app_state: 0,
+};
+
+/** Read-only structural verification against the exact expected v1 shape (R1/F01). */
 function verifyStructure(db, { backup = false } = {}) {
     const structures = db.prepare('SELECT type, name, sql FROM sqlite_master').all();
     const expected = backup ? BACKUP_TABLES : Object.keys(EXPECTED_TABLES);
@@ -108,7 +159,7 @@ function verifyStructure(db, { backup = false } = {}) {
     }
     for (const structure of structures) {
         if (structure.type === 'table') continue; // exact columns checked per table below
-        if (structure.type === 'index' && (structure.sql === null || structure.sql === undefined)) continue; // automatic indexes only
+        if (structure.type === 'index' && (structure.sql === null || structure.sql === undefined)) continue; // automatic indexes checked per table below
         throw refuse(`出现${structure.type === 'view' ? '视图' : structure.type === 'trigger' ? '触发器' : '自建索引'}: ${structure.name}`);
     }
     for (const tableName of expected) {
@@ -121,6 +172,24 @@ function verifyStructure(db, { backup = false } = {}) {
             || column.notnull !== wanted[index].notnull || column.pk !== wanted[index].pk)) {
             throw refuse(`表 ${tableName} 列/约束不符: ${columns.map(c => `${c.name}:${c.type}:${c.notnull}:${c.pk}`).join(',')}`);
         }
+        // F01: the stored CREATE statement must match our own DDL verbatim (normalized) — this is
+        // what catches added CHECK constraints, altered/dropped DEFAULTs, UNIQUE changes and FKs.
+        const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`).get(tableName);
+        if (normalizeSql(row && row.sql) !== (backup ? BACKUP_TABLE_SQL : EXPECTED_TABLE_SQL)[tableName]) {
+            throw refuse(`表 ${tableName} 定义（UNIQUE/CHECK/FK/DEFAULT）与 v1 不符`);
+        }
+        // F01: automatic indexes must match exactly what our constraints produce.
+        const autoIndexes = db.prepare(`PRAGMA index_list(${tableName})`).all()
+            .filter(index => index.origin === 'u' || index.origin === 'pk');
+        if (autoIndexes.length !== EXPECTED_AUTO_INDEXES[tableName]) {
+            throw refuse(`表 ${tableName} 自动索引数量不符: ${autoIndexes.length}`);
+        }
+    }
+    // F01: the declared foreign key must exist exactly as authored.
+    const foreignKeys = db.prepare('PRAGMA foreign_key_list(snapshots)').all();
+    if (foreignKeys.length !== 1 || foreignKeys[0].table !== 'projects'
+        || foreignKeys[0].from !== 'project_id' || foreignKeys[0].to !== 'project_id') {
+        throw refuse('snapshots 外键定义与 v1 不符');
     }
     const migrations = db.prepare('SELECT version, fingerprint, applied_at FROM schema_migrations').all();
     if (migrations.length !== 1 || Number(migrations[0].version) !== SCHEMA_VERSION
@@ -477,29 +546,6 @@ function wrapDatabase(db, { now, faults }) {
         },
     };
 }
-
-// Backup databases carry ONLY the necessary project/snapshot/version schema (no leases, no
-// app_state, no triggers or views) so a restore can whitelist the exact structure.
-const BACKUP_DDL = `
-CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, fingerprint TEXT NOT NULL, applied_at TEXT NOT NULL);
-CREATE TABLE projects (
-  project_id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  revision INTEGER NOT NULL DEFAULT 0,
-  current_snapshot_id TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE TABLE snapshots (
-  project_id TEXT NOT NULL REFERENCES projects(project_id),
-  snapshot_id TEXT PRIMARY KEY,
-  revision INTEGER NOT NULL,
-  digest TEXT NOT NULL,
-  length INTEGER NOT NULL,
-  created_at TEXT NOT NULL,
-  UNIQUE (project_id, revision)
-);
-`;
 
 /** Build an isolated, immediately-complete backup database in one pass. */
 function createBackupDatabase(file, { project, snapshots, createdAt }) {

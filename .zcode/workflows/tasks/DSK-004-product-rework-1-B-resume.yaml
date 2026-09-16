@@ -1,0 +1,109 @@
+task_id: DSK-004-product
+phase: "Rework-1 B续接；与已提交A段同一轮返工，不重置计数"
+status: IMPLEMENTED_AWAITING_REVIEW
+source_root: "E:/director-desk/director-desk-web"
+base_commit: "66ce152ccccab068765fdff8f6968e90c81584f9"
+initial_worktree: "git pull --ff-only后clean；随后主会话仅新增本续接任务单。coder写前记录状态/触及文件hash与独立备份，保留已提交A段。"
+contract_version: "已批准dsk.v1兼容增量storage.v1.*，不再扩契约"
+approval:
+  approved: true
+  reference: "用户拉取最新并继续开发；DSK-004-product原批准计划与rework-1清单；director-planner agent_86848305-0941-4745-85f3-1d809bb76812只读核实PLAN_READY。"
+goal: "完成尚未实施的R4/R5/R6/R11，补真实接线反例及全量证据，然后整体独立复审R1-R11。"
+context_files:
+  - AGENTS.md
+  - 进度.md
+  - implementation/DSK-004.md
+  - .zcode/workflows/tasks/DSK-004-product.yaml
+  - .zcode/workflows/tasks/DSK-004-product-rework-1.md
+  - .zcode/plans/plan-sess_eb0067fe-a560-495d-9531-9beb2e0d04fe.md
+  - src/scenes/scene-workspace.ts
+allowed_changes:
+  - src/editor/managed-project.ts
+  - src/editor/recovery-autosave.ts
+  - src/main.ts
+  - src/app-context.ts
+  - src/ui/project-library.ts
+  - src/ui/project-save.ts
+  - src/ui/events.ts
+  - src/ui/application-menu.ts
+  - tests/managed-project.test.ts
+  - tests/recovery-autosave.test.ts
+  - tests/scene-workspace.test.ts
+  - tests/dsk-storage.test.cjs
+  - tests/fixtures/dsk-storage/
+  - scripts/test-dsk-storage-desktop.mjs
+  - .zcode/workflows/tasks/DSK-004-product.yaml
+  - .zcode/workflows/tasks/DSK-004-product-rework-1-B-resume.yaml
+  - implementation/DSK-004.md
+  - 进度.md
+  - "任务列表.md：仅本任务状态"
+  - "tmp/dsk-004-rework1-b-<唯一标识>/：隔离日志/profile/测试数据/备份，不覆盖历史证据"
+non_goals:
+  - "不重复迁入源码或已PASS SQLite gate，不修改相邻仓库"
+  - "不改A段主进程存储实现、公共契约/依赖/锁文件/代理配置，不默认改SceneWorkspace引擎"
+  - "不推进005、009或全工作流恢复，不提交推送/发布/真实付费"
+acceptance:
+  - id: R4
+    criterion: "managed新建/旧导入统一dirty确认、资源准备、autosave排空、成功leave；失败取消保留原文档身份。"
+    evidence_required: "A→新建或导入B→保存不改A revision/current/hash；取消/解析/资源/leave失败反例及实际main/events接线。"
+  - id: R5
+    criterion: "跨managed切换复用SceneWorkspace.reset清undo/redo及旧历史资源，普通unmanaged导入撤销保持。"
+    evidence_required: "A→B→undo/redo不回A且保存不串写；多场景/旧导入回归。"
+  - id: R6
+    criterion: "候选准备与activate全异步边界验证epoch/revision；成功前保留原binding，失败释放候选；启动unknown不回旧recovery。"
+    evidence_required: "延迟bootstrap/download/activate、首存失败、autosave进行中直接反例，文档identity/dirty/租约/持久选择同时正确。"
+  - id: R11
+    criterion: "nextCursor分页、project.status实际查询刷新、占用/健康/不确定保存查询并确认重开闭环。"
+    evidence_required: ">50项列表翻页与查询失败/取消/状态变化；outcome-unknown保持dirty不盲重试。"
+  - id: V
+    criterion: "A/B全量回归及真实prepared UI闭环；关键未验收不得假PASS。"
+    evidence_required: "test/build/prepare/contracts+files+storage桌面命令真实退出码和新日志；菜单创建编辑保存退出重开备份恢复及失败取消，不用controller/IPC替代UI接线。64MiB满额/并发备份缺证据明确报告，不标004完成。"
+verification:
+  - npm test
+  - npm run build
+  - npm run desktop:prepare
+  - node scripts/test-dsk-contracts-desktop.mjs
+  - node scripts/test-files-desktop.mjs
+  - node scripts/test-dsk-storage-desktop.mjs
+side_effects_approved:
+  - "既有构建产物及隔离本地Electron/Chrome/test库，沿用原产品计划授权；无新增安装。"
+dependencies:
+  - "DSK003及SQLite gate独立PASS，继承最新远程记录"
+  - "A段已实施未整体复审，必须保留，旧日志不假设本机存在"
+rollback: "只按本轮备份撤回B段增量，禁止reset/clean，不损坏已提交A段或用户数据。"
+implementation:
+  agent: director-coder
+  baseline: "66ce152ccccab068765fdff8f6968e90c81584f9（工作树clean，写前备份 tmp/dsk-004-rework1-b-coder1/）"
+  changed_files:
+    - src/editor/managed-project.ts
+    - src/app-context.ts
+    - src/main.ts
+    - src/ui/events.ts
+    - src/ui/project-library.ts
+    - tests/managed-project.test.ts
+    - tests/scene-workspace.test.ts
+    - scripts/test-dsk-storage-desktop.mjs
+    - implementation/DSK-004.md
+    - 进度.md
+    - 任务列表.md
+    - .zcode/workflows/tasks/DSK-004-product-rework-1-B-resume.yaml
+  checks:
+    - "npm test → exit 0（474 通过/0 失败，含新增4个反例）"
+    - "npx tsc --noEmit → exit 0"
+    - "npm run build → exit 0"
+    - "npm run desktop:prepare → exit 0"
+    - "node scripts/test-dsk-contracts-desktop.mjs → exit 0"
+    - "node scripts/test-files-desktop.mjs → exit 0"
+    - "node scripts/test-dsk-storage-desktop.mjs → exit 0（阶段1/1.5/2/3/4/5/6.0-6.6全过）"
+  logs: "tmp/dsk-004-rework1-b-coder1/logs/"
+  notes:
+    - "R4/R6：leaveManagedBeforeSwitch 纯协议 + main/events/library 真实接线；R5：applyDocument(resetHistory) 走 SceneWorkspace.reset；R11：nextCursor 分页 + project.status 面板 + 重开闭环。"
+    - "人工边界：备份/恢复原生目录对话框、不确定保存端到端触发（需真实回执丢失）留人工验收，已在 Phase6-BOUNDARY 与 implementation/DSK-004.md 标注。"
+    - "R8 待核实未关闭：renderer saveSnapshot 仍全量 JSON.stringify 后再验长；越出 B 段范围未处理，交整体复审。"
+  blockers: []
+review:
+  agent: director-reviewer
+  verdict: PENDING
+  findings: []
+  rework_rounds: 1
+  scope: "B完成后审全部R1-R11，A段不因已提交被自动关闭；注意R8 renderer编码预算仍待核实。"

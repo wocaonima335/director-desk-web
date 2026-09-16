@@ -1,0 +1,153 @@
+task_id: DSK-004-product
+phase: Rework-2
+status: IMPLEMENTED_AWAITING_REVIEW
+source_root: "E:/director-desk/director-desk-web"
+base_commit: "66ce152ccccab068765fdff8f6968e90c81584f9"
+initial_worktree: "HEAD包含A段；工作树包含已实施B段及记录。不得当clean，CP0记录全部已有增量/hash/备份。"
+approval:
+  approved: true
+  reference: "已批准DSK004产品计划与用户继续开发指令；reviewer确认F01-F12均原范围REWORK；planner agent_86848305-0941-4745-85f3-1d809bb76812核实PLAN_READY。"
+contract_version: "保持dsk.v1/storage.v1及原v1 SQLite格式，不增字段/错误码/依赖"
+goal: "在原批准范围修复F01-F12及关键验收；单一coder串行任务，检查点不自评PASS。"
+context_files:
+  - .zcode/workflows/tasks/DSK-004-product.yaml
+  - .zcode/workflows/tasks/DSK-004-product-rework-1.md
+  - .zcode/workflows/tasks/DSK-004-product-rework-1-B-resume.yaml
+  - implementation/DSK-004.md
+  - 进度.md
+  - tmp/dsk-004-review-1789573034052/results.json
+  - tmp/dsk-004-review-1789573034052/results-extra.json
+allowed_changes:
+  - desktop/storage/library.cjs
+  - desktop/storage/objects.cjs
+  - desktop/storage/service.cjs
+  - desktop/integration.cjs
+  - "desktop/main.cjs：仅确有必要的退出排空接线"
+  - shared/storage/canonical.ts
+  - src/editor/managed-project.ts
+  - src/editor/recovery-autosave.ts
+  - src/main.ts
+  - src/app-context.ts
+  - src/ui/project-library.ts
+  - src/ui/project-save.ts
+  - src/ui/events.ts
+  - src/ui/application-menu.ts
+  - tests/dsk-storage.test.cjs
+  - tests/managed-project.test.ts
+  - tests/recovery-autosave.test.ts
+  - tests/scene-workspace.test.ts
+  - tests/dsk-contracts.test.ts
+  - tests/dsk-contracts.test.cjs
+  - tests/fixtures/dsk-storage/
+  - scripts/test-dsk-storage-desktop.mjs
+  - scripts/test-dsk-contracts-desktop.mjs
+  - .zcode/workflows/tasks/DSK-004-product.yaml
+  - .zcode/workflows/tasks/DSK-004-product-rework-2.yaml
+  - implementation/DSK-004.md
+  - 进度.md
+  - "任务列表.md：仅本任务状态"
+  - "tmp/dsk-004-rework2-<唯一标识>/：仅隔离测试/日志/备份/profile"
+non_goals:
+  - "不动shared/contracts/CSS/preload/file-host/package/lock/provider/原批准计划/旧gate或审查证据"
+  - "不重跑已PASS SQLite gate，不动相邻仓库，不提交推送，不进005，不真实付费"
+  - "不重置返工计数，不降低64MiB或10000快照要求，不以合成点击替代真实可操作验收"
+checkpoints:
+  - "CP0保全及具名红测试：先保存未修版本反例结果，不改测试预期消除缺陷"
+  - "CP1存储可信性/生命周期/有界资源修复及局部反例验证"
+  - "CP2候选原子切换/同项目重开/dirty确认/真实可点击UI"
+  - "CP3全量及关键验收；检查点仅进度，单一整体交付"
+acceptance:
+  - id: F01
+    criterion: "严格识别实际UNIQUE/CHECK/FK/default/autoindex及表列定义；拒绝异常活动/备份库且原字节不变，不改v1格式掩盖。"
+  - id: F02
+    criterion: "统一受信根父目录/末端/真实路径检查，拒projects/项目/objects任一junction；读写复制清理不越界，外部哨兵不变。"
+  - id: F03
+    criterion: "非空snapshots要求current存在并对应项目/最大revision；NULL/旧revision/他项目引用拒绝，不新增恢复项目。"
+  - id: F04
+    criterion: "await前预留下载及上传frame/host容量；异步边界后复查生命周期；abort成功后不得commit；closeFrame期间迟到begin不成功不残留part/句柄/slot。"
+  - id: F05
+    criterion: "句柄stat+有界读取/增长检测，renderer/canonical生成中累计UTF8/深度/节点预算；合法67108864字节桌面保存下载重开，超1字节/规范化膨胀/伪声明65MiB对象拒绝；实际读取量与峰值资源有证据。"
+  - id: F06
+    criterion: "有推导依据的同一manifest读写预算，5000及10000快照自产备份可恢复，不降低数量上限。"
+  - id: F07
+    criterion: "提交后getProject/回执故障纳入结果判定；已证明成功则准确返回，否则outcome-unknown，不普通失败误导重试。"
+  - id: F08
+    criterion: "候选与活动binding分离；bootstrap起即busy；activate回执后复查epoch/revision才同步应用；应用/失效后补偿持久选择，补偿失败显式未确认禁止误写。"
+  - id: F09
+    criterion: "同项目重开复用有效session，不先close；下载/资源失败保持文档binding/dirty/租约/持久选择，覆盖真实unknown后重开。"
+  - id: F10
+    criterion: "所有整档替换统一dirty确认；取消无候选/身份/租约副作用，确认期间状态改变复查。"
+  - id: F11
+    criterion: "仅项目库局部布局滚动修复；50+条目/状态展开/小窗口下真实指针键盘能触达，不dispatchEvent/DOM click/force绕过。"
+  - id: F12
+    criterion: "dialog/复制/发布前复查frame/disposed，取消排空后再关DB；reload/dispose晚返回不发布备份/登记恢复，staging/pending/handle清理。"
+  - id: V
+    criterion: "并发保存revision2时revision1一致视图备份恢复；unknown保存查询/取消/失败/重开闭环；真实菜单创建编辑保存退出重开原生目录对话框备份恢复。原生dialog mock不算真UI；不能完成列关键阻塞不假PASS。保留R4/R5/unmanaged/租约回归。"
+verification:
+  - node --test tests/dsk-storage.test.cjs
+  - node --experimental-strip-types --test tests/managed-project.test.ts
+  - npm test
+  - npm run build
+  - npm run desktop:prepare
+  - node scripts/test-dsk-contracts-desktop.mjs
+  - node scripts/test-files-desktop.mjs
+  - node scripts/test-dsk-storage-desktop.mjs
+side_effects_approved:
+  - "原批准的隔离本地测试/故障注入/现有构建/Electron运行；无新增安装或网络业务"
+rollback: "仅按CP0恢复第二轮增量，保留A/B及配置用户数据，不reset/clean或自动清理损坏/孤立对象。"
+implementation:
+  agent: director-coder
+  baseline: "66ce152（HEAD）+ 未提交B段增量；CP0保全于 tmp/dsk-004-rework2-coder2/CP0/（hash+full.diff+红测试日志）"
+  changed_files:
+    - desktop/storage/library.cjs
+    - desktop/storage/objects.cjs
+    - desktop/storage/service.cjs
+    - desktop/integration.cjs
+    - src/editor/managed-project.ts
+    - src/app-context.ts
+    - src/main.ts
+    - src/ui/project-library.ts
+    - src/ui/project-save.ts
+    - src/ui/events.ts
+    - tests/dsk-storage.test.cjs
+    - tests/managed-project.test.ts
+    - tests/scene-workspace.test.ts
+    - scripts/test-dsk-storage-desktop.mjs
+    - implementation/DSK-004.md
+    - 进度.md
+    - 任务列表.md
+    - .zcode/workflows/tasks/DSK-004-product-rework-2.yaml
+  checks:
+    - "node --test tests/dsk-storage.test.cjs → 0（41/41：10红转绿+5000/10000备份+并发revision视图）"
+    - "npm test → 0（489 通过/0 失败）"
+    - "npx tsc --noEmit → 0"
+    - "npm run build → 0；npm run desktop:prepare → 0"
+    - "node scripts/test-dsk-contracts-desktop.mjs → 0"
+    - "node scripts/test-files-desktop.mjs → 0"
+    - "node scripts/test-dsk-storage-desktop.mjs → 0（15个PHASE-OK：租约5阶段+真实UI 6.0/6MAX/6.1-6.6）"
+  key_evidence:
+    - "F05：真实桌面 67108864 字节满额上传/提交/下载逐字节相等/重读成功；67108865 拒绝（PHASE6MAX）"
+    - "F06：5000 与 10000 快照自产备份 round-trip；manifest 推导 4MiB 预算（推导注释在源码）"
+    - "V：revision2 提交于 dialog 门控期间，备份视图仍为 revision1，恢复项目 revision=1 且 digest 一致"
+    - "F04：并发下载仅一胜；abort 与 commit 队列化必有一胜；closeFrame 竞态 begin 失败且无 .part 残留"
+    - "F08：activate 回执后复查才应用，补偿失败 unconfirmed 拒写（单测）；F09：同项目重开租约 generation 不变（PHASE6.4c）"
+    - "F11：真实指针 scrollIntoViewIfNeeded+click 与键盘 focus+Enter，无 dispatchEvent/DOM click/force（PHASE6.5）"
+  manual_boundary:
+    - "备份/恢复原生目录对话框真实 UI 验收需主会话/人工（启动方式与 UI 步骤已提供），mock 未用于替代"
+    - "outcome-unknown 端到端 UI 触发需真实提交回执丢失；其分类（单测）、状态面板与重开路径已分别验证"
+  blockers: []
+review:
+  agent: director-reviewer
+  verdict: REWORK
+  reference: "agent_726ea8fd-adac-4dfd-8c9d-077e1bfd3ce1 第二轮独立审查；489测试通过但关键反例失败，已交planner重规划。"
+  evidence: "tmp/dsk-004-review-r2-1789578564212/：results.json、restore-results.json、dispose-results.json、npm-test.log"
+  findings:
+    - "R2-01 reload后备份仍发布/恢复仍登记，缺frame generation请求失效。"
+    - "R2-02 dispose约10秒后pending仍1就关闭DB，integration不等待退出排空。"
+    - "R2-03 17个独立frame下载全成功，突破host16上限。"
+    - "R2-04 canonical未改仍全树复制/stringify，renderer仍全量编码，部分对象读取无界，缺峰值。"
+    - "R2-05 同项目重开下载rev2但binding还rev1，下次保存冲突。"
+    - "R2-06 候选/补偿失败泄漏、startup先应用、文档无回滚、controller未守unconfirmed写。"
+    - "R2-07 dirty确认前未捕获版本身份，确认后才采样，可能过期授权。"
+  rework_rounds: 2
+  escalation: "第二轮整体仍不PASS必须转planner重规划，禁止直接第三轮修补；扩公共契约/CSS/依赖/迁移先报告取得批准。"

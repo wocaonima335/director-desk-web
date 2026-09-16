@@ -194,6 +194,10 @@ export function bindEvents(ctx: AppContext) {
                 await prepareDocumentModels(ctx.engine.externalModels, p);
                 if (ctx.draft || ctx.history.pending || ctx.project !== original || JSON.stringify(ctx.project) !== checkpoint)
                     throw new Error('读取期间工程或操作状态已改变，请结束当前操作后重新导入');
+                // R4: the managed session is left only after the new document parsed, verified and
+                // prepared; a refused confirmation or failed leave keeps the original managed
+                // project (document, dirty state, lease) fully untouched.
+                if (!await ctx.leaveManagedForSwitch('导入新工程')) return;
                 ctx.busy = false; ctx.applyDocument(p, sceneContext, '打开工程', true);
                 ctx.toast('项目已导入，可以继续编辑');
             }

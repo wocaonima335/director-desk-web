@@ -30,7 +30,13 @@ const {
 
 const UPLOADS_DIR = 'uploads';
 const HOST_MAX_TRANSFERS = 16;
-const MANIFEST_MAX_BYTES = 1024 * 1024; // R8: bounded manifest read
+// F06: the manifest budget is derived from the APPROVED backup maximums, not an arbitrary cap.
+// Worst case at STORAGE_BACKUP_MAX_SNAPSHOTS = 10000: each pretty-printed snapshot entry measures
+// ~250 bytes (uuid + ISO date + 64-hex digest + revision + JSON syntax), so 10000 x 260 = 2.6 MB;
+// objects are bounded by distinct digests (<= one per snapshot): 10000 x ~96 = 0.96 MB; the fixed
+// header is < 1 KB. Total < 3.7 MB, so 4 MiB admits every legal self-produced backup (5000 and
+// 10000 snapshots must round-trip) while still refusing adversarial multi-megabyte manifests.
+const MANIFEST_MAX_BYTES = 4 * 1024 * 1024;
 
 function fail(reason, detail) {
     return storageFailure(reason, detail);
@@ -223,20 +229,25 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
 
     function closeSession(sessionId) {
         const session = sessions.get(sessionId);
-        if (!session) return false;
+        if (!session) return [];
         sessions.delete(sessionId);
         stopRenewal(session);
+        // F04/F12: collect the cancellation promises so callers can drain tmp-file cleanup before
+        // closing the database or finishing navigation.
+        const cancellations = [];
         for (const transfer of [...transfers.values()]) {
-            if (transfer.sessionId === sessionId) void cancelTransfer(transfer, 'session-closed');
+            if (transfer.sessionId === sessionId) cancellations.push(cancelTransfer(transfer, 'session-closed'));
         }
         if (session.leaseOwned && session.lease) {
             try { db.releaseLease(session.projectId, session.lease.owner, session.lease.generation); } catch { /* best effort */ }
         }
-        return true;
+        return cancellations;
     }
 
+    /** F04/F12: awaitable drain — every transfer cancellation (incl. tmp file removal) has
+     * settled when the returned promise resolves. */
     function closeFrameSessions() {
-        for (const sessionId of [...sessions.keys()]) closeSession(sessionId);
+        return Promise.all([...sessions.keys()].flatMap(sessionId => closeSession(sessionId)));
     }
 
     // --- Pipeline actions (DSK-003 surface, now real) -------------------------------
@@ -386,11 +397,22 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
             transfers.set(transferId, transfer);
             session.uploadTransferId = transferId;
             try {
-                await fsp.mkdir(path.dirname(tmpPath), { recursive: true });
+                await store.trustedSubdir(UPLOADS_DIR);
                 transfer.handle = await fsp.open(tmpPath, 'wx');
-            } catch {
+            } catch (error) {
                 await cancelTransfer(transfer, 'tmp-open-failed');
+                if (error && error.reason === 'path-refused') return projectErrorToFailure(error);
                 return fail('io-failure', '上传临时文件创建失败');
+            }
+            // F04: the tmp file was opened after awaits — re-check that the session/frame is still
+            // alive before answering success; a late success must not leak a handle or a .part.
+            if (!sessions.has(session.sessionId) || transfer.cancelled || !transfers.has(transferId)) {
+                // cancelTransfer early-returns for an already-removed transfer; close and clean
+                // up directly so neither the handle nor the .part file outlives the frame.
+                try { await transfer.handle?.close(); } catch { /* already closed */ }
+                try { await fsp.rm(tmpPath, { force: true }); } catch { /* best effort */ }
+                if (transfers.has(transferId)) await cancelTransfer(transfer, 'session-closed');
+                return fail('unknown-session', '存储会话已关闭，上传未创建');
             }
             return ok('storage.v1.upload.begin', { transferId, declaredLength: data.declaredLength, chunkSize: STORAGE_CHUNK_BYTES });
         },
@@ -454,6 +476,11 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                     await cancelTransfer(transfer, 'tmp-read-failed');
                     return fail('io-failure', '上传临时文件读取失败');
                 }
+                // F04: re-check liveness after every await — an abort that landed while this
+                // operation was queued or awaiting must win, never the late commit.
+                if (transfer.cancelled || !transfers.has(transfer.transferId) || !sessions.has(session.sessionId)) {
+                    return fail('unknown-transfer', '传输已取消或会话已关闭');
+                }
                 if (bytes.length !== transfer.declaredLength) {
                     await cancelTransfer(transfer, 'length-mismatch');
                     return fail('upload-format', '上传内容长度与声明不符');
@@ -483,7 +510,13 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                     await cancelTransfer(transfer, 'object-write-failed');
                     return projectErrorToFailure(error);
                 }
+                // F04: the object write awaited — the abort may have landed in that window.
+                if (transfer.cancelled || !transfers.has(transfer.transferId) || !sessions.has(session.sessionId)) {
+                    return fail('unknown-transfer', '传输已取消或会话已关闭');
+                }
                 try { await fsp.rm(transfer.tmpPath, { force: true }); } catch { /* best effort */ }
+                // From here the commit is finalizing: the transfer leaves the map FIRST, so a late
+                // abort can no longer observe or cancel it.
                 transfers.delete(transfer.transferId);
                 session.uploadTransferId = undefined;
                 try {
@@ -499,9 +532,12 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                     // Object may be published while registration failed: it stays an untrusted orphan.
                     return projectErrorToFailure(error);
                 }
-                let project;
-                try { project = db.getProject(transfer.projectId); }
-                catch (error) { return projectErrorToFailure(error); }
+                // F07: the commit transaction returned, so the snapshot is provably registered and
+                // the revision is derived by the transaction's own guards. The getProject receipt
+                // is best-effort: a receipt read failure must never downgrade a proven commit into
+                // a retryable failure.
+                let project = null;
+                try { project = db.getProject(transfer.projectId); } catch { /* receipt unavailable */ }
                 const revision = project ? Number(project.revision) : transfer.expectedRevision + 1;
                 if (transfer.name && project && project.name !== transfer.name) {
                     try { db.renameProject(transfer.projectId, transfer.name); session.name = transfer.name; } catch { /* rename is best effort */ }
@@ -516,8 +552,15 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
             const transfer = transfers.get(data.transferId);
             if (!transfer) return fail('unknown-transfer', '传输不存在或已结束');
             requireSession(transfer.sessionId);
-            await cancelTransfer(transfer, 'aborted');
-            return ok('storage.v1.transfer.abort', { aborted: true });
+            // F04: route the abort through the same serial queue as every other operation, so an
+            // abort can never interleave with a mid-flight commit — exactly one of them wins.
+            return enqueueTransferOperation(transfer, async () => {
+                if (!transfers.has(transfer.transferId) || transfer.cancelled) {
+                    return fail('unknown-transfer', '传输已取消或结束，操作被拒绝');
+                }
+                await cancelTransfer(transfer, 'aborted');
+                return ok('storage.v1.transfer.abort', { aborted: true });
+            });
         },
 
         // --- downloads -----------------------------------------------------------------
@@ -528,41 +571,61 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
             }
             const counts = frameTransferCounts(currentEvent());
             if (counts.downloads >= STORAGE_MAX_TRANSFERS_PER_FRAME) return fail('transfer-limit', '已存在进行中的下载');
-            let project, snapshot;
-            try {
-                project = db.getProject(session.projectId);
-                if (!project) return fail('unknown-project', '项目不存在');
-                snapshot = data.snapshotId
-                    ? db.getSnapshot(session.projectId, data.snapshotId)
-                    : (project.current ? db.getSnapshot(session.projectId, project.current.snapshotId) : null);
-            } catch (error) { return projectErrorToFailure(error); }
-            if (!snapshot) return fail('unknown-snapshot', '快照不存在');
-            let bytes;
-            try {
-                bytes = await store.getObject(session.projectId, snapshot.digest, snapshot.length);
-            } catch (error) { return projectErrorToFailure(error); }
+            // F04: the slot is reserved synchronously BEFORE any await — two concurrent reads can
+            // no longer both slip through the check while the object is being read.
             const transferId = randomUUID();
-            transfers.set(transferId, {
+            const transfer = {
                 kind: 'download', transferId, sessionId: session.sessionId, projectId: session.projectId,
-                bytes, offset: 0, snapshot, startedAt: now(), lastActivity: now(), event: currentEvent(),
+                bytes: null, pending: true, offset: 0, snapshot: null,
+                startedAt: now(), lastActivity: now(), event: currentEvent(),
                 queue: Promise.resolve(), cancelled: undefined,
-            });
+            };
+            transfers.set(transferId, transfer);
             session.downloadTransferId = transferId;
-            return ok('storage.v1.snapshot.read', {
-                snapshot: { version: 'dsk.v1', snapshotId: snapshot.snapshotId, projectId: session.projectId, revision: snapshot.revision, digest: snapshot.digest, createdAt: snapshot.createdAt },
-                transferId,
-                length: snapshot.length,
-                chunkSize: STORAGE_CHUNK_BYTES,
-                chunks: Math.ceil(snapshot.length / STORAGE_CHUNK_BYTES),
-            });
+            try {
+                let project, snapshot;
+                try {
+                    project = db.getProject(session.projectId);
+                    if (!project) throw Object.assign(Error('项目不存在'), { reason: 'unknown-project' });
+                    snapshot = data.snapshotId
+                        ? db.getSnapshot(session.projectId, data.snapshotId)
+                        : (project.current ? db.getSnapshot(session.projectId, project.current.snapshotId) : null);
+                } catch (error) {
+                    await cancelTransfer(transfer, 'lookup-failed');
+                    if (error && error.reason === 'unknown-project') return fail('unknown-project', '项目不存在');
+                    return projectErrorToFailure(error);
+                }
+                if (!snapshot) {
+                    await cancelTransfer(transfer, 'unknown-snapshot');
+                    return fail('unknown-snapshot', '快照不存在');
+                }
+                const bytes = await store.getObject(session.projectId, snapshot.digest, snapshot.length);
+                // F04: the object read awaited — re-check that this transfer is still the live one.
+                if (transfer.cancelled || !transfers.has(transferId) || !sessions.has(session.sessionId)) {
+                    return fail('unknown-transfer', '下载已取消或结束');
+                }
+                transfer.bytes = bytes;
+                transfer.pending = false;
+                transfer.snapshot = snapshot;
+                return ok('storage.v1.snapshot.read', {
+                    snapshot: { version: 'dsk.v1', snapshotId: snapshot.snapshotId, projectId: session.projectId, revision: snapshot.revision, digest: snapshot.digest, createdAt: snapshot.createdAt },
+                    transferId,
+                    length: snapshot.length,
+                    chunkSize: STORAGE_CHUNK_BYTES,
+                    chunks: Math.ceil(snapshot.length / STORAGE_CHUNK_BYTES),
+                });
+            } catch (error) {
+                await cancelTransfer(transfer, 'read-failed');
+                return projectErrorToFailure(error);
+            }
         },
         'storage.v1.snapshot.download.chunk': async data => {
             const transfer = transfers.get(data.transferId);
             if (!transfer || transfer.kind !== 'download') return fail('unknown-transfer', '下载会话不存在或已结束');
             requireSession(transfer.sessionId);
             return enqueueTransferOperation(transfer, async () => {
-                if (transfer.cancelled || !transfers.has(transfer.transferId)) {
-                    return fail('unknown-transfer', '下载已取消或结束');
+                if (transfer.cancelled || !transfers.has(transfer.transferId) || transfer.pending || !transfer.bytes) {
+                    return fail('unknown-transfer', '下载已取消或尚未就绪');
                 }
                 const start = transfer.offset;
                 const slice = transfer.bytes.subarray(start, Math.min(start + STORAGE_CHUNK_BYTES, transfer.bytes.length));
@@ -591,6 +654,9 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
             if (totalBytes > STORAGE_BACKUP_MAX_BYTES) return fail('transfer-limit', '对象总大小超出备份上限');
             const chosen = await pickDirectory('选择备份位置', '备份项目库');
             if (!chosen) return ok('storage.v1.backup.create', { cancelled: true });
+            // F12: the dialog awaited — re-check the service/frame before any staging or publish.
+            const goneAfterPick = requestGone();
+            if (goneAfterPick) return fail('storage-unavailable', `${goneAfterPick}，备份未创建`);
             const finalDir = path.join(chosen, `director-desk-backup-${new Date(now()).toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`);
             const stagingDir = path.join(chosen, `.staging-${randomUUID()}`);
             try {
@@ -626,6 +692,12 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                     objects: [...objects.values()],
                 };
                 await fsp.writeFile(path.join(stagingDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+                // F12: publish only into a still-live context; late returns clean up staging.
+                const goneBeforePublish = requestGone();
+                if (goneBeforePublish) {
+                    try { await fsp.rm(stagingDir, { recursive: true, force: true }); } catch { /* best effort */ }
+                    return fail('storage-unavailable', `${goneBeforePublish}，备份未发布`);
+                }
                 await fsp.rename(stagingDir, finalDir);
             } catch (error) {
                 try { await fsp.rm(stagingDir, { recursive: true, force: true }); } catch { /* best effort */ }
@@ -643,6 +715,9 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
         'storage.v1.backup.restore': async () => {
             const chosen = await pickDirectory('选择备份目录', '恢复备份');
             if (!chosen) return fail('dialog-cancelled', '已取消恢复');
+            // F12: the dialog awaited — never register a restore for a dead service/frame.
+            const goneAfterPick = requestGone();
+            if (goneAfterPick) return fail('storage-unavailable', `${goneAfterPick}，恢复未执行`);
             let restored;
             try {
                 restored = await restoreFromBackup(chosen);
@@ -680,6 +755,18 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
         });
         if (result.canceled || !result.filePaths || result.filePaths.length !== 1) return null;
         return result.filePaths[0];
+    }
+
+    /** F12: after every await (dialog pick, staging writes) the requesting context is re-checked:
+     * a disposed service or a destroyed sender frame must never publish a backup or register a
+     * restore. Returns a human reason when the request has lost its context, null otherwise. */
+    function requestGone() {
+        if (disposed) return '存储服务已停止';
+        const event = currentEvent();
+        if (event && event.sender && typeof event.sender.isDestroyed === 'function' && event.sender.isDestroyed()) {
+            return '页面已关闭';
+        }
+        return null;
     }
 
     function safeEntryName(name) {
@@ -767,17 +854,29 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                 throw Object.assign(Error('备份包含未被快照引用的对象'), { reason: 'backup-invalid' });
             }
         }
-        // R3 relation sanity: unique revisions, current pointer inside the snapshot set,
-        // project revision equal to the newest snapshot revision.
+        // R3/F03 relation sanity: unique revisions, current pointer present and pointing at the
+        // newest snapshot. A NULL current with non-empty snapshots (or a stale/foreign pointer)
+        // must be rejected — such a backup can never be re-registered as a coherent project.
         const revisions = manifestData.snapshots.map(s => s.revision);
         if (new Set(revisions).size !== revisions.length || revisions.some(r => r < 1)) {
             throw Object.assign(Error('备份快照版本不唯一或无效'), { reason: 'backup-invalid' });
         }
-        if (inspected.project.currentSnapshotId && !manifestData.snapshots.some(s => s.snapshotId === inspected.project.currentSnapshotId)) {
-            throw Object.assign(Error('备份当前快照指针不在快照集合内'), { reason: 'backup-invalid' });
-        }
-        if (inspected.project.revision !== Math.max(...revisions)) {
-            throw Object.assign(Error('备份项目版本与快照集合不一致'), { reason: 'backup-invalid' });
+        if (manifestData.snapshots.length) {
+            if (!inspected.project.currentSnapshotId) {
+                throw Object.assign(Error('备份包含快照但缺少当前快照指针'), { reason: 'backup-invalid' });
+            }
+            const currentSnapshot = manifestData.snapshots.find(s => s.snapshotId === inspected.project.currentSnapshotId);
+            if (!currentSnapshot) {
+                throw Object.assign(Error('备份当前快照指针不在快照集合内'), { reason: 'backup-invalid' });
+            }
+            if (currentSnapshot.revision !== Math.max(...revisions)) {
+                throw Object.assign(Error('备份当前快照指针不是最新版本'), { reason: 'backup-invalid' });
+            }
+            if (inspected.project.revision !== Math.max(...revisions)) {
+                throw Object.assign(Error('备份项目版本与快照集合不一致'), { reason: 'backup-invalid' });
+            }
+        } else if (inspected.project.currentSnapshotId) {
+            throw Object.assign(Error('空备份不允许携带当前快照指针'), { reason: 'backup-invalid' });
         }
         for (const entry of objectEntries) {
             const match = /^([0-9a-f]{64})\.json$/.exec(safeEntryName(entry));
@@ -861,11 +960,18 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
         };
     }
 
-    function dispose() {
+    /** F12: draining dispose — transfers (incl. tmp cleanup) are awaited, in-flight handlers get
+     * a bounded grace period, and only then does the database close. Late handler returns observe
+     * `disposed` and never publish a backup or register a restore afterwards. */
+    async function dispose() {
         if (disposed) return;
         disposed = true;
         clearInterval(sweeper);
-        closeFrameSessions();
+        try { await closeFrameSessions(); } catch { /* best effort */ }
+        const deadline = now() + 10000;
+        while (pendingOperations > 0 && now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 25));
+        }
         try { db.close(); } catch { /* already closed */ }
     }
 
