@@ -1,5 +1,5 @@
 const { prepareMediaImport } = require('./media-import.cjs');
-const { ipcMain, app, safeStorage, clipboard } = require('electron');
+const { ipcMain, app, safeStorage, clipboard, dialog } = require('electron');
 const { randomUUID } = require('node:crypto');
 const path = require('node:path');
 const { createAIHost } = require('./ai-host.cjs');
@@ -8,8 +8,14 @@ const { releaseVersion } = require('./release-version.cjs');
 const { createSkillStore } = require('./skills/store.cjs');
 const { createSkillHost } = require('./skills/host.cjs');
 const { TOOL_DEFINITIONS, MCP_TOOL_DEFINITIONS, DISCUSSION_TOOLS, isDiscussionToolCall, BUILTIN_SKILL } = require('./tools-contract.cjs');
-// DSK-003: pure shared contract (bundled in by esbuild; validates payloads in the main process).
+// DSK-003/004: pure shared contract (bundled in by esbuild; validates payloads in the main process).
 const { dispatchDskRequest, isTrustedDskFrame } = require('../shared/contracts/index.ts');
+// DSK-004 storage service: sessions, leases, snapshots, backup/restore. The document verifier and
+// canonical serializer are DOM-free TS modules bundled in; the Electron dialog stays injectable.
+const { createStorageService, createUnavailableStorageService } = require('./storage/service.cjs');
+const { assertSceneDocument } = require('../src/scenes/sequence-project.ts');
+const { canonicalJson } = require('../shared/storage/canonical.ts');
+const { BackupManifestSchema } = require('../shared/contracts/storage.ts');
 function attachIntegration(window) {
     const pending = new Map(); let ready = false;
     const skills = createSkillStore({ directory: app.getPath('userData'), builtin: BUILTIN_SKILL });
@@ -34,12 +40,41 @@ function attachIntegration(window) {
     const resultHandler = (event, data) => { if (!trusted(event) || !data || !pending.has(data.id)) return; const item = pending.get(data.id); clearTimeout(item.timer); pending.delete(data.id); item.resolve(data.result); };
     const readyHandler = event => { if (trusted(event)) ready = true; };
     ipcMain.on('director-tool-result', resultHandler); ipcMain.on('director-tools-ready', readyHandler);
+    // DSK-004 managed project library: userData/managed in the product; isolated directory and
+    // short lease overrides only for unpackaged test runs, never for packaged builds.
+    // R1: an unusable library (foreign schema, damaged file) must be reportable through the dsk
+    // channel, never block app startup — every action then answers with the frozen failure shape.
+    let storage = null;
+    const storageVerifiers = { document: assertSceneDocument, canonical: canonicalJson, manifest: BackupManifestSchema };
+    const createService = root => {
+        const ttlOverride = Number(process.env.DIRECTOR_STORAGE_LEASE_TTL_MS);
+        return createStorageService({
+            root,
+            verifiers: storageVerifiers,
+            dialog,
+            leaseTtlMs: Number.isFinite(ttlOverride) && ttlOverride >= 1000 ? ttlOverride : 30000,
+            leaseRenewMs: Number.isFinite(ttlOverride) && ttlOverride >= 1000 ? Math.max(1000, Math.floor(ttlOverride / 3)) : 10000,
+        });
+    };
+    if (!app.isPackaged && app.commandLine.hasSwitch('director-storage-dir')) {
+        try {
+            storage = createService(path.resolve(app.commandLine.getSwitchValue('director-storage-dir')));
+        } catch (error) {
+            storage = createUnavailableStorageService(error && error.message);
+        }
+    } else {
+        try {
+            storage = createService(path.join(app.getPath('userData'), 'managed'));
+        } catch (error) {
+            storage = createUnavailableStorageService(error && error.message);
+        }
+    }
     // DSK-003 minimal restricted pipeline channel: same sender/main-frame trust policy as
-    // director-host, schema-validated payload, closed action whitelist. DSK-003 ships no handlers,
-    // so every legal action returns NOT_IMPLEMENTED until storage/workflow/model tasks land.
+    // director-host, schema-validated payload, closed action whitelist. DSK-004 wires the real
+    // storage handlers; workflow/model actions still return NOT_IMPLEMENTED (DSK-007/016).
     ipcMain.handle('director-dsk', async (event, input) => {
         if (!isTrustedDskFrame(event, window)) return { ok: false, error: { code: 'UNTRUSTED_SENDER', message: '拒绝未知页面' } };
-        return dispatchDskRequest(input, {});
+        return storage.runInRequestContext(event, () => dispatchDskRequest(input, storage.handlers));
     });
     ipcMain.handle('director-host', async (event, input) => {
         if (!trusted(event)) throw new Error('拒绝未知页面');
@@ -70,9 +105,9 @@ function attachIntegration(window) {
             return { ok: true, data: result };
         } catch (e) { return { ok: false, error: e.message }; }
     });
-    window.webContents.on('did-start-loading', () => { ready = false; host.stop(); for (const task of pending.values()) { clearTimeout(task.timer); task.resolve({ ok: false, execution: 'unknown', error: '页面重新载入，调用结果未确认；请重新读取工程，不要直接重复写入' }); } pending.clear(); });
-    window.on('closed', () => { host.stop(); void mcp.close(); for (const task of pending.values()) { clearTimeout(task.timer); task.resolve({ ok: false, execution: 'unknown', error: '软件已关闭，调用结果未确认；请重新读取工程，不要直接重复写入' }); }
+    window.webContents.on('did-start-loading', () => { ready = false; host.stop(); storage.closeFrameSessions(); for (const task of pending.values()) { clearTimeout(task.timer); task.resolve({ ok: false, execution: 'unknown', error: '页面重新载入，调用结果未确认；请重新读取工程，不要直接重复写入' }); } pending.clear(); });
+    window.on('closed', () => { host.stop(); void mcp.close(); storage.dispose(); for (const task of pending.values()) { clearTimeout(task.timer); task.resolve({ ok: false, execution: 'unknown', error: '软件已关闭，调用结果未确认；请重新读取工程，不要直接重复写入' }); }
         ipcMain.removeHandler('director-host'); ipcMain.removeHandler('director-dsk'); ipcMain.removeListener('director-tool-result', resultHandler); ipcMain.removeListener('director-tools-ready', readyHandler); });
-    return { isBusy: () => host.isRunning() || skillHost.isBusy() || pending.size > 0 };
+    return { isBusy: () => host.isRunning() || skillHost.isBusy() || pending.size > 0 || storage.isBusy() };
 }
 module.exports = { attachIntegration };

@@ -2,7 +2,13 @@
 
 记录日期：2026-09-15。
 
-## 当前续接状态（2026-09-16）
+## 最新状态：DSK-004 第1轮返工暂停检查点
+
+以根目录[进度.md](../进度.md)及[DSK-004实施报告](DSK-004.md)为当前依据。DSK-001～003技术PASS，SQLite门禁独立PASS；DSK-004产品首轮审查REWORK，A段修复已有coder验证（470测试及桌面回归），B段未完成、整体未复审。按负责人要求保存GitHub检查点，不代表产品验收或发布。
+
+下文是前一轮机器/分支检查点的历史，尤其旧SQLite门禁REWORK和003返工描述不应覆盖最新结论；当前实际工作目录为`E:/myProgram/DirectorDesk/director-desk-web`。
+
+## 历史续接状态（2026-09-16）
 
 - 已在 `checkpoint/dsk-003-progress` / `8b09b43c1fb03c8a42d98cd2e50b64db5486a98e` 续接，真实根目录为 `E:/director-desk/director-desk-web`；未重复迁入源码。
 - 三个 `director-*` 代理均已实际调用并读取文件；精确后台模型路由仍未验证。既有 planner/reviewer provider 修正保留。

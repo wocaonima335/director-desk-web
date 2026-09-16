@@ -6,10 +6,16 @@
 import { z } from 'zod';
 import { DSK_CONTRACT_VERSION, type DskContractVersion } from './version.ts';
 import { DskErrorSchema, IdSchema, StorySpecSchema } from './schema.ts';
+import { STORAGE_ACTIONS, STORAGE_ACTION_PAYLOAD_SCHEMAS, type DskStorageAction } from './storage.ts';
 
-export type { DskContractVersion };
+export type { DskStorageAction, DskContractVersion };
 export const DSK_ACTIONS = ['project.list', 'project.status', 'project.open', 'project.create', 'plan.submit-spec', 'plan.get', 'approval.request', 'approval.decide', 'state.get', 'state.events', 'model.status'] as const;
 export type DskAction = (typeof DSK_ACTIONS)[number];
+
+// DSK-004: the storage.v1.* namespace rides the same envelope. The original pipeline action list,
+// its payloads and the generic message limits stay frozen; only the envelope whitelist widens.
+export const DSK_ENVELOPE_ACTIONS = [...DSK_ACTIONS, ...STORAGE_ACTIONS] as const;
+export type DskEnvelopeAction = DskAction | DskStorageAction;
 
 const version = z.literal(DSK_CONTRACT_VERSION);
 const integer = (min: number, max: number) => z.number().int().min(min).max(max);
@@ -29,11 +35,16 @@ const PAYLOAD_SCHEMAS = {
     'model.status': z.strictObject({}),
 } satisfies Record<DskAction, z.ZodType>;
 export const DSK_ACTION_PAYLOAD_SCHEMAS: Record<DskAction, z.ZodType> = PAYLOAD_SCHEMAS;
+// Combined lookup for the dispatcher; storage payloads come from the additive registry.
+export const DSK_ENVELOPE_PAYLOAD_SCHEMAS: Record<DskEnvelopeAction, z.ZodType> = {
+    ...PAYLOAD_SCHEMAS,
+    ...STORAGE_ACTION_PAYLOAD_SCHEMAS,
+};
 export type DskActionPayloads = { [A in DskAction]: z.infer<(typeof PAYLOAD_SCHEMAS)[A]> };
 
 const DskEnvelopeSchema = z.strictObject({
     version,
-    action: z.enum(DSK_ACTIONS),
+    action: z.enum(DSK_ENVELOPE_ACTIONS),
     data: z.unknown().optional(),
 });
 
@@ -96,7 +107,7 @@ export function isTrustedDskFrame(
 }
 
 export type DskActionHandler = (data: unknown) => DskResult<unknown> | Promise<DskResult<unknown>>;
-export type DskActionHandlers = { [A in DskAction]?: DskActionHandler };
+export type DskActionHandlers = { [A in DskEnvelopeAction]?: DskActionHandler };
 
 // Pure request pipeline shared by the real Electron main process and both test harnesses.
 // DSK-003 ships no storage/workflow handlers yet, so every legal action returns NOT_IMPLEMENTED;
@@ -119,7 +130,7 @@ export async function dispatchDskRequest(input: unknown, handlers: DskActionHand
         return failure('INVALID_PAYLOAD', '信封结构不合法', formatIssues(envelope.error));
     }
     const { action } = envelope.data;
-    const payload = DSK_ACTION_PAYLOAD_SCHEMAS[action].safeParse(envelope.data.data === undefined ? {} : envelope.data.data);
+    const payload = DSK_ENVELOPE_PAYLOAD_SCHEMAS[action].safeParse(envelope.data.data === undefined ? {} : envelope.data.data);
     if (!payload.success) return failure('INVALID_PAYLOAD', '动作参数未通过校验', formatIssues(payload.error));
     const handler = handlers[action];
     if (!handler) return failure('NOT_IMPLEMENTED', `动作 ${action} 已通过校验，但处理器尚未接入（DSK-004/007/016 交付）`);

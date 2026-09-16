@@ -26,7 +26,7 @@ export function mountApplicationMenu() {
     mode.querySelector('[data-creation-mode="geometry"]')!.textContent = '几何体';
     document.querySelector('.sidebar .side-tabs')!.append(mode);
     const definitions: [string, string, [string, string?][]][] = [
-        ['file', '文件', [['[data-act="project"]'], ['[data-act="scene-templates"]'], ['[data-act="open"]'], ['[data-menu-copy="save"]'], ['[data-menu-copy="export"]'], ['[data-act="model-import"]'], ['[data-act="user-motion-library"]'], ['[data-act="production-notes"]']]],
+        ['file', '文件', [['[data-act="project"]'], ['[data-act="scene-templates"]'], ['[data-act="open"]'], ['[data-menu-entry="project-library"]', '项目库'], ['[data-menu-copy="save"]'], ['[data-menu-copy="export"]'], ['[data-act="model-import"]'], ['[data-act="user-motion-library"]'], ['[data-act="production-notes"]']]],
         ['edit', '编辑', [['[data-act="undo"]', '撤销'], ['[data-act="redo"]', '重做'], ['#settings-toggle', '设置'], ['#reset-layout', '重置面板布局']]],
         ['scene', '场景', [['[data-act="room"]'], ['[data-act="spatial-open"]']]],
         ['help', '帮助', [['[data-act="help"]', '操作与快捷键'], ['#update-toggle', '检查更新']]],

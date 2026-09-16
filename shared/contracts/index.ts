@@ -26,7 +26,9 @@ export {
 } from './schema.ts';
 export {
     DSK_ACTIONS,
+    DSK_ENVELOPE_ACTIONS,
     DSK_ACTION_PAYLOAD_SCHEMAS,
+    DSK_ENVELOPE_PAYLOAD_SCHEMAS,
     DSK_MAX_PAYLOAD_CHARS,
     DSK_MAX_PAYLOAD_DEPTH,
     DSK_MAX_PAYLOAD_NODES,
@@ -36,12 +38,42 @@ export {
 } from './actions.ts';
 export type {
     DskAction,
+    DskEnvelopeAction,
+    DskStorageAction,
     DskActionHandler,
     DskActionHandlers,
     DskActionPayloads,
     DskError,
     DskResult,
 } from './actions.ts';
+export {
+    STORAGE_ACTIONS,
+    STORAGE_ACTION_PAYLOAD_SCHEMAS,
+    STORAGE_RESULT_SCHEMAS,
+    PIPELINE_STORAGE_RESULT_SCHEMAS,
+    STORAGE_FAILURE_REASONS,
+    STORAGE_MAX_PROJECT_BYTES,
+    STORAGE_CHUNK_BYTES,
+    STORAGE_MAX_DEPTH,
+    STORAGE_MAX_NODES,
+    STORAGE_UPLOAD_IDLE_MS,
+    STORAGE_TRANSFER_TOTAL_MS,
+    STORAGE_MAX_TRANSFERS_PER_FRAME,
+    STORAGE_LEASE_TTL_MS,
+    STORAGE_LEASE_RENEW_MS,
+    STORAGE_BACKUP_MAX_SNAPSHOTS,
+    STORAGE_BACKUP_MAX_BYTES,
+    STORAGE_CHUNK_B64_CHARS,
+    BackupManifestSchema,
+    ProjectSummarySchema,
+    ProjectStatusSchema,
+    StorageSessionSchema,
+    SessionBootstrapResultSchema,
+    storageFailure,
+    scanStorageProject,
+    isStorageFailureReason,
+} from './storage.ts';
+export type { DskStorageActionPayloads, DskStorageResults, StorageFailureReason, StorageBackupManifest } from './storage.ts';
 export type {
     RoleId,
     EntityId,

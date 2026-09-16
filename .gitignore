@@ -107,6 +107,9 @@ file-locations.json
 
 !/scripts/verify-file-permissions-desktop.mjs
 
+# DSK-004 managed storage: real-Electron lease/snapshot verification entry (approved 004 scope).
+!/scripts/test-dsk-storage-desktop.mjs
+
 # This repository additionally tracks planning documents and the multi-agent
 # workflow configuration; upstream's source-only whitelist must not hide them.
 !/AGENTS.md

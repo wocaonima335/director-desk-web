@@ -1,0 +1,80 @@
+task_id: DSK-004-sqlite-gate-evidence-replan-01
+status: PASS # lf-fix新冻结运行G1-G8独立审查通过；原失败目录历史保留，非DSK004产品完成
+source_root: "E:/myProgram/DirectorDesk/director-desk-web"
+base_commit: "0c9cb17887eda8a363ae6472d7917bb2a54c8665"
+parent_task: DSK-004-sqlite-gate
+prior_verdict: REPLAN
+prior_rework_rounds: 2
+initial_worktree: "本轮ExitPlanMode保存导致.zcode/plans/plan-sess_eb0067fe-a560-495d-9531-9beb2e0d04fe.md修改；主会话新增本任务单。执行前纳入全部tracked及非ignored untracked的实际集合/hash。不能假称仍clean。"
+contract_version: "无变更"
+approval:
+  approved: true
+  reference: "本会话新一轮ExitPlanMode明确批准：仅证据生命周期重规划、fixture通过后一次新G1-G8真实运行；不追认旧G8。"
+goal: "冻结脚本、保护旧证据、独占一次执行及外部退出回执，完成可独立复核的新SQLite兼容性门禁。"
+run_root: "E:/myProgram/DirectorDesk/director-desk-web/tmp/dsk-004-sqlite-gate/replan01-20260916T022955Z-edcc3e3b"
+allowed_changes:
+  - "仅run_root中新探针、fixture、manifest、外层launcher、结果日志、测试DB/profile。必须先确认目录不存在再创建。"
+non_goals:
+  - "不修改生产/共享/锁/构建/prepared/旧脚本/旧attempt/任务记录/报告/代理配置。"
+  - "不新增依赖、网络资源、产品库/租约/快照/迁移，不commit/push。"
+  - "不恢复或伪造历史执行脚本，不把旧G1-G7认可当新G8通过。"
+history:
+  reviewer: "agent_70f8c6f5-1d86-4356-b641-c79944a43fdc"
+  findings:
+    - "SQ-R2-01：失败attempt2与最终attempt3四脚本相同，无法可靠追溯失败时版本；G1-G7实际证据认可，G8未放行。"
+    - "SQ-R2-02：拒绝重跑分支会追加日志/覆盖final-report；新运行必须任何持久写入前拒绝。"
+  old_runs:
+    - "tmp/dsk-004-sqlite-gate/20260916T020734Z-rework2-pid3209"
+    - "tmp/dsk-004-sqlite-gate/20260916T021530Z-rework2-pid4733"
+acceptance:
+  - "旧指定attempt四脚本/日志/报告当前hash前后不变；说明历史版本不可恢复，不扫描旧cache/profile。"
+  - "任何fixture运行前冻结全部执行代码manifest，主会话独立取得摘要后才放行执行；结束代码集合hash不变。"
+  - "永久独占标记原子wx；重复启动先拒绝再无任何写入；final/各结果不可覆盖，A/B/C亦单次启动。"
+  - "隔离fixture验证完成目录/中断标记重跑均非零无子进程、集合/hash/mtime不变；并发唯一持有者；观察记录写在被测目录外。"
+  - "源码和prepared前后独立枚举，集合与hash完整比较，fixture检测新增/删除/修改。"
+  - "一次新G1-G8运行保留原门禁语义：Electron44.2 browser/ready+prepared真实did-finish-load、参数化文件DB、commit/rollback/WAL/有限busy/synchronous/checkpoint、独立B锁忙无部分写释放受控重试、A/B正常0之后C严格只读重开精确5行且写拒绝。"
+  - "隔离路径、硬超时与本任务进程回收；强杀不算通过；外部launcher记录编排器实际exit code/signal/PID/时间，缺回执不能PASS。"
+  - "独立director-reviewer审查原证据与保护逻辑，不仅结果布尔值。"
+verification:
+  preparation: "coder仅写新代码并冻结manifest，返回路径/hash及实际fixture和launcher命令；主会话留存hash后续接同一coder执行，不编辑已冻结代码。"
+  fixture: "实际命令由coder提供，失败立即停止，不真实运行。"
+  real_run: "fixture通过后只执行一次新外部launcher，保留工具实际终端退出码。"
+stop_conditions:
+  - "目录占用/基线漂移/脚本变化/路径越界/prepared缺失=>BLOCKED，不自行修复。"
+  - "fixture失败=>封存并停止。真实运行失败/超时/强杀=>封存并停止；不自动第二次试跑。"
+  - "review不通过=>回报主会话，不借新目录无限循环。"
+side_effects_approved:
+  - "指定新tmp目录写入，fixture隔离子进程与本地Electron/SQLite一次验证，无真实网络资源。"
+rollback: "只关闭连接和本任务进程，保留全部证据，不删除标记、不reset/clean。"
+implementation:
+  agent: director-coder
+  changed_files: []
+  checks:
+    - "主会话执行前独立manifest SHA256：5234a34dcc5fc8cc1a6f3e0a645c90f7990b5d0bd528111f50fc814bcf1b50e8。"
+    - "fixture仅运行一次exit1：未创建results目录导致写fixture-result.json时ENOENT；launcher未运行，无真实G1-G8结果。"
+    - "主会话只读确认五个case JSON均PASS，共34断言，但汇总缺失不能视为fixture门禁通过。"
+    - "冻结7脚本未改；旧失败attempt2四脚本和logs/results共14文件前后集合内容摘要4fd0a67c4f62e20511010eb015fbf5d7c79b1db4fb6869c3487a157be45df4be相同。"
+  results_init_revision:
+    approval: "Ethan在主会话列出最小修订后明确继续任务。"
+    run_root: "tmp/dsk-004-sqlite-gate/replan01-results-init-20260916T033611Z-81032b89-551b-4078-bc08-c8e257f5fda3"
+    manifest_sha256: "0257e6d83df7384fb5866e3a913384de1cc08dd923624d252759f1f96e6a3b3d"
+    result: "BLOCKED；fixture一次exit0且34断言PASS；launcher一次exit2，取得自己的launcher.lock后仍将该锁列入阻断项，未spawn编排器/Electron。"
+    preservation: "冻结代码未改、无重试、旧证据未变；主会话Read核实launcher.cjs第67-72行自锁冲突。"
+  historical_blocker: "results-init自锁后封存；launcher-fix预审发现LF01并发mtime误判、LF02异常汇总可能假PASS及LF03获批provider基线漂移；均在获批lf-fix新目录修复，旧记录不改。"
+  lf_fix_revision:
+    approval: "Ethan在独立审查REWORK及最小修订说明后明确：批准再次测试。"
+    run_root: "tmp/dsk-004-sqlite-gate/lf-fix-20260916T065222Z-9cd62767-c431-4c8c-a263-88c52ade3065"
+    manifest_sha256: "01fae3476abd58be00921d56c02c505183a15a7fa42439950b088f1f2475f33a"
+    checks:
+      - "launcher-regression exit0，3case/35断言PASS。"
+      - "error-injection drill exit0，8断言PASS；隔离子fixture预期exit1/FAIL，后续case未执行。"
+      - "正式fixture exit0，5case/34断言PASS。"
+      - "真实launcher仅一次exit0；外回执编排器35800正常exit0，A21996/B10416/C10704均0，C在AB退出之后启动，无强杀超时。"
+      - "新G1-G8独立核实PASS：Electron44.2.0内嵌Node24.20.0/SQLite3.53.4；源码587文件/prepared39/11冻结执行文件及五个旧目录无漂移。"
+    evidence: "run_root/results、logs、baseline、launcher-regression、error-injection、manifest；完成后不得重跑或修改冻结证据。"
+  blockers: []
+review:
+  agent: director-reviewer
+  verdict: PASS
+  reference: "agent_134de967-fc28-4a2e-a3ca-8c6bc186246a；先预执行PASS，再独立核对真实G1-G8及源码/prepared全部集合hash后最终PASS。"
+  scope: "只放行DSK004项目库实施入口；不代表产品库/租约/快照/崩溃恢复/断电/安装包或人工验收完成；不追认旧G8。"

@@ -5,6 +5,7 @@ import type { EditorHistory } from './storage.ts';
 import type { SceneWorkspace } from './scenes/scene-workspace.ts';
 import type { SceneDocument } from './scenes/sequence-project.ts';
 import type { SceneContext } from './scenes/sequence-session.ts';
+import type { ManagedProjectController } from './editor/managed-project.ts';
 /** UI modules receive an explicit application boundary; they never own the scene or persistence. */
 export interface AppContext {
     addAsset(id: string, position?: Vec3): void;
@@ -35,6 +36,10 @@ export interface AppContext {
     readonly engine: Engine;
     readonly history: EditorHistory;
     readonly scenes: SceneWorkspace;
+    /** DSK-004 managed project library controller (absent in plain browser sessions). */
+    readonly managed: ManagedProjectController;
+    /** Drain pending recovery writes before switching documents (cancel + settle in-flight). */
+    drainRecovery(): Promise<void>;
     applyDocument(document: SceneDocument, context: SceneContext, label: string, resetViews?: boolean): void;
     switchScene(id: string, context: SceneContext): void;
     current(): Entity | undefined;

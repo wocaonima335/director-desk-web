@@ -1,5 +1,12 @@
-import type { DskAction, DskActionPayloads, DskResult } from '../../shared/contracts/index.ts';
-export type { DskAction, DskActionPayloads, DskResult };
+import type { DskAction, DskActionPayloads, DskEnvelopeAction, DskResult, DskStorageAction, DskStorageActionPayloads } from '../../shared/contracts/index.ts';
+export type { DskAction, DskActionPayloads, DskEnvelopeAction, DskStorageAction, DskStorageActionPayloads, DskResult };
+export type DskEnvelopePayloads = {
+    [A in DskAction]: DskActionPayloads[A];
+} & {
+    [A in DskStorageAction]: DskStorageActionPayloads[A];
+};
+type DskCaller = ((action: DskAction, data?: DskActionPayloads[DskAction]) => Promise<DskResult<unknown>>)
+    & ((action: DskStorageAction, data?: DskStorageActionPayloads[DskStorageAction]) => Promise<DskResult<unknown>>);
 
 export interface Channel { id: string; name: string; protocol: 'chat' | 'responses' | 'anthropic'; baseUrl: string; model: string; hasKey: boolean; remembered: boolean; stream: boolean; maxTokens: number; maxRounds: number }
 export interface DesktopResult<T = unknown> { ok: boolean; data?: T; error?: string }
@@ -29,8 +36,8 @@ declare global {
         resetMcp(): Promise<DesktopResult<{ enabled: boolean; url?: string; lanEnabled?: boolean; lanUrl?: string; lanIp?: string; lanPort?: number }>>;
         onEvent(callback: (event: AgentEvent) => void): () => void;
         onTool(callback: (name: string, args: Record<string, unknown>) => Promise<unknown>): () => void;
-        // DSK-003 restricted pipeline channel (dsk.v1). Results stay untyped data until the
-        // storage/workflow tasks (DSK-004/007/016) provide real handlers.
-        dsk?<A extends DskAction>(action: A, data?: DskActionPayloads[A]): Promise<DskResult<unknown>>;
+        // DSK-003 restricted pipeline channel (dsk.v1); DSK-004 adds the storage.v1.* namespace.
+        // Storage results carry validated shapes from the main process (self-checked there).
+        dsk?: DskCaller;
     } }
 }

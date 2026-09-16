@@ -28,6 +28,8 @@ import { assertProject, clone } from './model.ts';
 import { autosave, recover } from './storage.ts';
 import { SceneWorkspace } from './scenes/scene-workspace.ts';
 import { RecoveryAutosave } from './editor/recovery-autosave.ts';
+import { ManagedProjectController } from './editor/managed-project.ts';
+import { mountProjectLibrary } from './ui/project-library.ts';
 import { readSceneDocument, projectForScene, type SceneDocument } from './scenes/sequence-project.ts';
 import type { SceneContext } from './scenes/sequence-session.ts';
 import { prepareDocumentModels } from './scenes/document-models.ts';
@@ -58,10 +60,16 @@ let draft: {
     id: string;
 } | null = null;
 const history = new SceneWorkspace(project, () => ({ time, selected, preview }));
+// DSK-004: managed sessions persist only through explicit snapshots; legacy IndexedDB recovery
+// stays disabled while a managed session is active, and is cancelled/drained on project switches.
+const managed = new ManagedProjectController(window.directorDesktop?.dsk
+    ? (action, data) => window.directorDesktop!.dsk!(action as never, data as never) : undefined);
 const recoverySave = new RecoveryAutosave(force => autosave(() =>
     history.pending || draft || engine.dragging || engine.exporting || busy && !force ? null : history.document()),
     () => { $('#save-status').textContent = '自动恢复已保存'; },
-    () => { $('#save-status').textContent = '请手动保存项目'; toast('自动恢复保存失败，请导出项目文件备份', true); });
+    () => { $('#save-status').textContent = '请手动保存项目'; toast('自动恢复保存失败，请导出项目文件备份', true); },
+    500, () => !managed.managedActive);
+async function drainRecovery() { await recoverySave.drain(); }
 let inspectorSeekTimer: ReturnType<typeof setTimeout> | undefined;
 let aborter: AbortController | null = null;
 let transformError: Error | undefined;
@@ -111,7 +119,7 @@ const engine = new Engine(project, $('#stage-canvas'), $('#shot-canvas'), {
 });
 function current() { return project.entities.find(e => e.id === selected); }
 function toast(message: string, error = false) { const el = document.createElement('div'); el.className = 'toast' + (error ? ' error' : ''); el.textContent = message; $('#toasts').append(el); while ($('#toasts').children.length > 3) $('#toasts').firstElementChild!.remove(); setTimeout(() => el.remove(), 5000); }
-function changed(rebuild = true) { revision++; dirty = true; time = Math.max(0, time); if (!current()) selected = project.entities.find(e => e.kind === 'actor')?.id ?? project.entities[0].id; engine.selected = selected; $('#save-status').textContent = '正在保存恢复副本…'; if (rebuild)
+function changed(rebuild = true) { revision++; dirty = true; time = Math.max(0, time); if (!current()) selected = project.entities.find(e => e.kind === 'actor')?.id ?? project.entities[0].id; engine.selected = selected; $('#save-status').textContent = managed.managedActive ? '由项目库管理 · 有未保存的修改' : '正在保存恢复副本…'; if (rebuild)
     engine.rebuild(project);
 else {
     engine.project = project;
@@ -239,6 +247,7 @@ function applyDocument(document: SceneDocument, context: SceneContext, label: st
     if (draft || history.pending || engine.exporting) throw Error('请先完成当前编辑或导出');
     for (const scene of document.scenes) engine.externalModels.assertReady(projectForScene(document, scene.id));
     project = history.replace(document, context, label, resetViews);
+    managed.epoch++; // DSK-004: the whole document changed; stale async completions must notice.
     restoreSceneView();
 }
 function switchScene(id: string, context: SceneContext) {
@@ -299,7 +308,7 @@ const uiContext: AppContext = {
     get busy() { return busy; }, set busy(value) { busy = value; },
     get draft() { return draft; }, set draft(value) { draft = value; },
     get aborter() { return aborter; }, set aborter(value) { aborter = value; },
-    get engine() { return engine; }, history, scenes: history, applyDocument, switchScene, current, toast, change, changed, extendDuration, selectEntity, renderPanels, renderSidebar, renderInspector, renderTimeline, renderCameras, updateTimeUI, seek, saveProject, showModal, closeModal, projectDialog, roomDialog, sceneDialog, createNew, makeCamera, startPath, finishPath, cancelPath, replaceAction, deleteDialog, deleteEntity, seatDialog, seatApply, snapshot, exportDialog, startExport, helpDialog, updateExportSummary, setView, addAsset, addGroundPoint, retimePath, applyField, applyMotion, applyFraming, act
+    get engine() { return engine; }, history, scenes: history, managed, drainRecovery, applyDocument, switchScene, current, toast, change, changed, extendDuration, selectEntity, renderPanels, renderSidebar, renderInspector, renderTimeline, renderCameras, updateTimeUI, seek, saveProject, showModal, closeModal, projectDialog, roomDialog, sceneDialog, createNew, makeCamera, startPath, finishPath, cancelPath, replaceAction, deleteDialog, deleteEntity, seatDialog, seatApply, snapshot, exportDialog, startExport, helpDialog, updateExportSummary, setView, addAsset, addGroundPoint, retimePath, applyField, applyMotion, applyFraming, act
 };
 const editingTools = createEditingTools(uiContext);
 bindEvents(uiContext);
@@ -323,19 +332,57 @@ mountUpdates(async run => {
     busy = true; playing = false;
     try { await recoverySave.flush(); await run(); } finally { busy = false; }
 });
+mountProjectLibrary(uiContext);
 mountApplicationMenu();
 renderPanels();
 engine.select(selected);
 requestAnimationFrame(frame);
-void recover().then(async p => { if (p && revision === 0) {
-    await prepareDocumentModels(engine.externalModels, p);
-    if (revision !== 0 || busy || history.pending || draft) { engine.externalModels.retain([project, ...history.undoStack, ...history.redoStack]); return; }
-    selectClip(null);project = history.reset(p);
-    selected = history.restoredSelection!; time = 0; preview = 'program';
-    engine.selected = selected; engine.rebuild(project);
-    renderPanels();
-    dirty = true; toast('已恢复上次工作');
-} }).catch(() => toast('未能读取自动恢复或模型资源，可以打开手动保存的项目文件'));
+
+/** DSK-004 startup isolation: the persisted managed choice wins over legacy IndexedDB recovery.
+ * A managed candidate is only confirmed after download, validation and resource preparation all
+ * succeed; failures keep the empty editor and surface the project library instead of loading
+ * stale recovery data. Unmanaged sessions keep the original recovery behavior untouched. */
+async function startupRestore() {
+    if (managed.available) {
+        let boot: Awaited<ReturnType<ManagedProjectController['bootstrap']>> = null;
+        try { boot = await managed.bootstrap(); }
+        catch (error) { toast(`项目库初始化失败：${(error as Error).message}`, true); }
+        if (boot?.mode === 'managed' && boot.projectId) {
+            try {
+                const session = await managed.open(boot.projectId);
+                if (!session.current) throw Error('该项目还没有保存的快照');
+                const { document } = await managed.download();
+                await prepareDocumentModels(engine.externalModels, document);
+                if (busy || history.pending || draft) throw Error('启动期间编辑器忙');
+                selectClip(null);
+                project = history.reset(document);
+                selected = history.restoredSelection!; time = 0; preview = 'program';
+                managed.epoch++;
+                engine.selected = selected; engine.rebuild(project);
+                renderPanels();
+                await managed.activate();
+                dirty = false;
+                $('#save-status').textContent = `受管项目：${managed.projectName}`;
+                return;
+            } catch (error) {
+                await managed.closeSession().catch(() => { });
+                toast(`受管项目打开失败：${(error as Error).message}；可通过文件菜单的项目库重试`, true);
+                $('#save-status').textContent = '受管项目打开失败';
+                return;
+            }
+        }
+    }
+    void recover().then(async p => { if (p && revision === 0) {
+        await prepareDocumentModels(engine.externalModels, p);
+        if (revision !== 0 || busy || history.pending || draft) { engine.externalModels.retain([project, ...history.undoStack, ...history.redoStack]); return; }
+        selectClip(null);project = history.reset(p);
+        selected = history.restoredSelection!; time = 0; preview = 'program';
+        engine.selected = selected; engine.rebuild(project);
+        renderPanels();
+        dirty = true; toast('已恢复上次工作');
+    } }).catch(() => toast('未能读取自动恢复或模型资源，可以打开手动保存的项目文件'));
+}
+void startupRestore();
 window.addEventListener('beforeunload', event => { if (dirty || busy || history.pending || draft) {
     event.preventDefault();
     event.returnValue = '';

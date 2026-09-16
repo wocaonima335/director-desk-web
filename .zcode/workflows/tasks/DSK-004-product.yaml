@@ -1,0 +1,117 @@
+task_id: DSK-004-product
+title: "本地项目库、不可变快照与用户操作闭环"
+status: REWORK # 首轮独立审查(agent_0f730860-bdfe-4b8d-bce9-278be7441d2e)REWORK；按rework-1清单A/B两段串行修复，同一轮返工
+source_root: "E:/myProgram/DirectorDesk/director-desk-web"
+base_commit: "0c9cb17887eda8a363ae6472d7917bb2a54c8665"
+initial_worktree: "初始保留：planner/reviewer provider各一行获批修改、当前会话计划文件、进度.md、新gate任务单未跟踪；本次新增产品任务单。编码前记录实际Git状态及将触及文件hash/备份，不假设clean。"
+contract_version: "dsk.v1兼容增量，新增storage.v1.*；既有SnapshotRef与通用IPC限制不变"
+approval:
+  approved: true
+  reference: "本会话ExitPlanMode已批准完整DSK004产品计划（契约增量/64MiB传输/租约/备份/恢复隔离/UI接线），并明确不重复SQLite gate。"
+context_files:
+  - "AGENTS.md"
+  - ".zcode/workflows/README.md"
+  - ".zcode/plans/plan-sess_eb0067fe-a560-495d-9531-9beb2e0d04fe.md"
+  - "进度.md"
+  - ".zcode/workflows/tasks/DSK-004-sqlite-gate-evidence-replan-01.yaml"
+  - "shared/contracts/actions.ts"
+  - "desktop/integration.cjs"
+  - "src/scenes/sequence-project.ts"
+goal: "完整SceneDocument项目创建/打开/显式快照保存/关闭/备份/恢复新工程；跨进程写排他，故障不产生错误可信指针，旧recovery不污染managed身份。"
+allowed_changes:
+  - "新增shared/contracts/storage.ts、shared/storage/、desktop/storage/、src/editor/managed-project.ts、src/ui/project-library.ts。"
+  - "shared/contracts/actions.ts、index.ts；desktop/integration.cjs、main.cjs；src/automation/desktop-types.ts、src/main.ts、src/app-context.ts、src/editor/recovery-autosave.ts、src/ui/project-save.ts、events.ts、application-menu.ts。"
+  - "新增tests/dsk-storage.test.cjs、tests/managed-project.test.ts、tests/fixtures/dsk-storage/、scripts/test-dsk-storage-desktop.mjs；既有tests/dsk-contracts.test.ts/.cjs、recovery-autosave.test.ts、scene-workspace.test.ts及scripts/test-dsk-contracts-desktop.mjs必要回归调整。"
+  - ".gitignore仅确切新脚本/fixture最小可跟踪例外；本任务单implementation、implementation/DSK-004.md及进度/任务列表本任务状态。"
+non_goals:
+  - "不改package/lock、不新增依赖、不换SQLite；默认不改preload/旧file-host/files或构建脚本，确需扩围先报告。"
+  - "不改原代理配置、已有gate证据、上游仓库；不重复gate、不构造多层冻结验证框架。"
+  - "不做005界面重做/009镜头事务撤销/011全工作流恢复、不commit/push/发布/真实付费。"
+  - "不迁移或删除旧工程/IndexedDB；不自动清理快照/孤立/损坏对象。"
+design:
+  storage: "userData/managed/library.sqlite和projects/UUID/objects/hash.json；schema_migrations/projects/snapshots/project_leases/app_state v1；未知schema或checksum不符拒绝写，不重建。"
+  snapshot: "完整v3 SceneDocument由主进程复用assertSceneDocument，无DOM导入验证；规范UTF16键排序JSON、数组顺序保留、有限数、UTF8 SHA256；tmp写sync/close同盘rename先于SQLite登记/前移current。"
+  failure: "写入失败不前移指针，DB登记失败可留孤立对象；COMMIT不确定先按snapshotId查证，仍不确定OUTCOME_UNKNOWN不盲重试。"
+  lease: "TTL30秒/每10秒主进程续租；BEGIN IMMEDIATE内owner+generation+过期+expectedRevision核验；过期重获递增generation，旧写者不能提交；不猜PID清锁。"
+  transfer: "单输入与规范工程JSON各64MiB、深64/节点100万；块48KiB严格base64顺序/长度；通用IPC256KiB字符/深32/20000节点不变；每frame1上传1下载，host总量有界；idle60秒/total10分钟。"
+  actions: "实现原project.list/status/create/open；新增storage.v1.project.list/close、session.bootstrap/activate/leave、upload.begin/chunk/commit、transfer.abort、snapshot.read/download.chunk、backup.create/restore；输入/成功结果strict，session/frame/generation绑定；错误ACTION_FAILED+storage.v1/<reason>，无path/secret/stack。"
+  bootstrap: "主进程返回上次managed/unmanaged选择；目标验证/资源准备成功后activate确认身份，显式leave才记录unmanaged；自动close不得消除重启managed选择。"
+  backup: "一致SQLite读视图下构造独立只含必要项目/快照/版本schema的备份，不复制运行DB/WAL/lease/app_state；固定schema拒trigger/view/额外结构；最多10000快照/10GiB流式复制校验，完成manifest后唯一目录发布。"
+  restore: "原生dialog选目录，无raw path IPC；只读校验schema/清单/关系/hash/文档/限制，拒符号链接junction越界；新projectId+目录+snapshot映射，全部对象就绪后一次事务登记，不覆盖/自动切换当前工程。"
+  renderer: "文件菜单项目库最小modal；managed保存/CtrlS/保存退出走快照，仅显式保存不写旧recovery；导出副本不清managed dirty；unmanaged保留旧行为；epoch/revision、autosave取消排空、防旧异步污染、切换reset历史、busy禁止切换；首存失败空项目清晰保留原文档dirty。"
+acceptance:
+  - id: A1
+    criterion: "契约严格且兼容，源/CJS同fixture，非法来源/会话/raw path拒绝，无后续功能假成功。"
+  - id: A2
+    criterion: "完整多场景/共享模型/media/origin保存重开不丢失，规范hash跨端一致。"
+  - id: A3
+    criterion: "write/sync/close/rename/DB登记/COMMIT回执故障注入验证指针及不确定结果，无半文件可信引用。"
+  - id: A4
+    criterion: "真实独立进程竞争、到期接管、旧generation拒绝、释放重获，含Electron产品路径。"
+  - id: A5
+    criterion: "缺文件/坏hash/坏JSON/未知schema/孤立对象明确识别，不偷修或前移。"
+  - id: A6
+    criterion: ">256KiB真实工程分块成功，64MiB边界/越序/base64/超时/跨frame失败，主进程及renderer有界。"
+  - id: A7
+    criterion: "并发保存下备份一致，恢复新项目历史hash一致；中断/损坏/schema/路径/junction拒绝，不覆盖原目录。"
+  - id: A8
+    criterion: "managed优先启动，旧recovery及延迟操作不覆盖新身份/清新dirty，失败保留原工程。"
+  - id: A9
+    criterion: "真实prepared UI创建编辑保存退出重开备份恢复闭环；取消/失败/旧导入导出/浏览器unmanaged/多场景撤销回归。"
+verification:
+  - "npm test"
+  - "npm run build"
+  - "npm run desktop:prepare"
+  - "node scripts/test-dsk-contracts-desktop.mjs"
+  - "node scripts/test-files-desktop.mjs"
+  - "node scripts/test-dsk-storage-desktop.mjs（新增后执行）"
+side_effects_approved:
+  - "既有构建产物/图标/许可生成；独立本地test库/profile、Electron/Chrome/回环；必要故障及进程测试。"
+dependencies:
+  - "DSK003技术PASS"
+  - "SQLite gate lf-fix G1-G8最终PASS；不再重跑"
+rollback: "仅撤回本任务增量，不reset/clean或覆盖原有五项修改；新库/用户数据保留停止写入，不破坏性降级。"
+implementation:
+  agent: director-coder
+  report: "implementation/DSK-004.md"
+  changed_files:
+    - "shared/contracts/storage.ts (新增)"
+    - "shared/contracts/actions.ts (信封白名单扩大，原动作/负载/通用限制不变)"
+    - "shared/contracts/index.ts (导出增量)"
+    - "shared/storage/canonical.ts (新增)"
+    - "desktop/storage/library.cjs (新增)"
+    - "desktop/storage/objects.cjs (新增)"
+    - "desktop/storage/service.cjs (新增)"
+    - "desktop/integration.cjs (存储服务接线、生命周期、busy)"
+    - "src/editor/managed-project.ts (新增)"
+    - "src/editor/recovery-autosave.ts (enabled门+cancel/drain)"
+    - "src/ui/project-library.ts (新增)"
+    - "src/ui/project-save.ts (managed快照保存/导出副本)"
+    - "src/ui/application-menu.ts (文件菜单项目库项)"
+    - "src/main.ts (managed优先启动、epoch、接线)"
+    - "src/app-context.ts (managed/drainRecovery)"
+    - "src/automation/desktop-types.ts (storage动作类型)"
+    - "tests/dsk-storage.test.cjs (新增)"
+    - "tests/fixtures/dsk-storage/cases.json (新增)"
+    - "tests/managed-project.test.ts (新增)"
+    - "scripts/test-dsk-storage-desktop.mjs (新增)"
+    - ".gitignore (仅新增一行脚本白名单例外)"
+    - "implementation/DSK-004.md、本任务单、任务列表.md、进度.md (记录)"
+  checks:
+    - "Rework-1 A段后 npm test exit0：470通过/0失败（原428+存储30+renderer12）；npx tsc --noEmit exit0；npm run build exit0；npm run desktop:prepare exit0"
+    - "node scripts/test-dsk-contracts-desktop.mjs exit0；node scripts/test-files-desktop.mjs exit0"
+    - "node scripts/test-dsk-storage-desktop.mjs exit0（双活busy+lease-busy拒绝、A释放后B接管generation=2、旧写者A被拒、A死TTL过期接管generation=4提交revision4；曾一次CDP瞬态失败与一次exit13悬挂，已加300s硬超时，复跑通过）"
+    - "A段反例：R1六变体+触发器改revision99活体证明+拒绝后字节不变；R2同长篡改拒绝不覆盖；R3改digest恢复拒绝/隐藏跨项目行/revision99；R7并发begin仅一胜+同offset仅一落+非规范base64+reload迟到拒绝；R8百万节点扫描/规范化膨胀/2MiB manifest/超声明长度/renderer下载限额；R9真实COMMIT落盘后抛按snapshotId查证三分类；R10真实跨连接锁续租受控失败+事务内时钟+dialog计入busy+disposed快速失败"
+  blockers:
+    - "B段未开始：R4 managed下新建/导入未leave；R5 跨工程undo串写；R6 候选切换/启动异步非原子+create无drain+bootstrap失败回退；R11 分页与状态查看UI；prepared真UI创建-保存-退出重开-备份恢复闭环（对话框部分人工）"
+  unverified:
+    - "人工GUI闭环（菜单modal、备份/恢复原生对话框、退出重开）留主会话验收"
+    - "Windows 11真机、突然断电、安装包、64MiB满额桌面实测未做"
+    - "旧generation拒绝为库级测试覆盖；并发写压测未做"
+review:
+  agent: director-reviewer
+  verdict: REWORK
+  reference: "agent_0f730860-bdfe-4b8d-bce9-278be7441d2e；首轮REWORK，问题清单.zcode/workflows/tasks/DSK-004-product-rework-1.md"
+  findings: "11项见rework-1清单；A段R1/R2/R3/R7/R8/R9/R10先实施，B段R4/R5/R6/R11续接"
+  unverified: []
+  rework_rounds: 1
