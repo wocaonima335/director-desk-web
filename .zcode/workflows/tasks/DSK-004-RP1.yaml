@@ -1,0 +1,96 @@
+task_id: DSK-004-RP1
+title: "请求frame generation失效与取消/提交仲裁"
+status: PASS # 继承A1-A4及关联validation-01最终PASS；非父DSK004整体PASS
+final_acceptance:
+  reference: "agent_692dd733-70e4-492f-8029-30415a6c073c 关联验证V1-V6最终PASS，可推进RP2。"
+  historical_verdict: "原review REPLAN与rework_rounds=2保留，不追改失败历史。"
+  limitation: "关联attempt1原始失败日志丢失仅NOTE，E01永久非阻断限制。"
+source_root: "E:/myProgram/DirectorDesk/director-desk-web"
+base_commit: "99c2582ee50e7abe1caa480628db360dd3fd9e66"
+initial_worktree: "本机开始时clean；主会话新增本任务单。编码前保存实际status及相关源文件摘要。"
+contract_version: "公共IPC/schema/工程/SQLite/备份格式不变"
+approval:
+  approved: true
+  reference: "远程进度.md第11行记录RP1-RP8已获负责人批准；本会话Ethan明确按远程进度继续。批准计划.zcode/plans/plan-sess_0f45933a-bf18-47df-952f-6fdc936de21f.md。"
+parent_history: "DSK004产品两轮REWORK保留，按批准新RP分项逐一审查，不笼统第三轮修补。"
+goal: "所有异步存储请求绑定frame generation，reload/close同步失效；取消与发布/DB登记有明确不可取消边界，旧请求不能迟到发布/登记或操作新代会话。"
+context_files:
+  - "AGENTS.md"
+  - ".zcode/workflows/README.md"
+  - ".zcode/plans/plan-sess_0f45933a-bf18-47df-952f-6fdc936de21f.md"
+  - ".zcode/workflows/tasks/DSK-004-product-rework-2.yaml"
+  - "desktop/storage/service.cjs"
+  - "desktop/integration.cjs"
+  - "tests/dsk-storage.test.cjs"
+  - "scripts/test-dsk-storage-desktop.mjs"
+allowed_changes:
+  - "desktop/storage/service.cjs、desktop/integration.cjs的请求生命周期与取消接线。"
+  - "tests/dsk-storage.test.cjs、tests/fixtures/dsk-storage/及scripts/test-dsk-storage-desktop.mjs中RP1针对性测试。"
+  - "本任务单实施字段、implementation/DSK-004-RP1.md、进度.md最新RP1记录。"
+non_goals:
+  - "不修改公共契约/工程/DB/备份格式/64MiB/host16限制、依赖/锁/代理配置或共享CSS。"
+  - "不实施RP2退出等待、RP3配额、RP4读取、RP5编码、RP6/7切换或RP8完整验收；必要发现记录到对应项。"
+  - "不改旧冻结证据，不重跑SQLite gate，不commit/push/发布/付费资源。"
+acceptance:
+  - id: RP1-A1
+    criterion: "每个异步请求捕获当前frame generation及取消状态；reload/close同步推进代/失效，旧请求和旧ID不能在新代继续执行。"
+  - id: RP1-A2
+    criterion: "原生dialog返回、复制开始/迭代完成、备份发布前、恢复DB登记前复核；可取消阶段失效后不发布或登记，保留原项目/既有备份。"
+  - id: RP1-A3
+    criterion: "提交/发布临界区之前原子仲裁；已提交或结果不确定如实处理，不能排队后伪称及时取消成功。不存在取消成功后迟到提交。"
+  - id: RP1-A4
+    criterion: "新代正常请求可成功、旧代迟到结果不破坏新代session/传输；拒绝和错误映射沿用原公共契约。"
+  - id: RP1-A5
+    criterion: "先保存未修版本具名反例及失败结果，再修并验证；新隔离目录保存源版本/日志/退出码，不覆盖历史。"
+verification:
+  - "node --test tests/dsk-storage.test.cjs（先具名针对反例，后整个存储套件）"
+  - "npm test"
+  - "npm run build"
+  - "npm run desktop:prepare及node scripts/test-dsk-storage-desktop.mjs（验证本轮真实接线时在批准范围内；不得使用拉取前旧prepared冒充）"
+side_effects_approved:
+  - "现有构建生成物及独立临时库/profile、Electron本地回环；无需安装依赖或真实外网业务。"
+dependencies:
+  - "既有RP计划已批准，001-003/gate历史PASS保留。"
+rollback: "仅撤回本任务增量，不reset/clean；保留用户数据和历史证据。"
+implementation:
+  agent: director-coder
+  baseline: "99c2582（HEAD，编码时 service/integration 与 HEAD 一致仅行尾差异）；CP0 保全于 tmp/dsk-004-rp1-coder-20260916-183053/（baseline 源版本+红测试日志+真实退出码）"
+  changed_files:
+    - desktop/storage/service.cjs
+    - tests/dsk-storage.test.cjs
+    - scripts/test-dsk-storage-desktop.mjs
+    - implementation/DSK-004-RP1.md
+    - 进度.md
+    - .zcode/workflows/tasks/DSK-004-RP1.yaml
+  changes_summary: "frameGeneration 代计数器+runInRequestContext 捕获令牌；closeFrameSessions/dispose 同步推进代；requestGone 增代判断并接入 begin/chunk/commit/read/abort、备份 dialog/复制迭代/发布前、恢复 dialog/复制开始/迭代/登记前；commit 临界区至同步 db.commitSnapshot 间零 await 原子仲裁；恢复清理补删空目录壳（仅空可删）。integration.cjs 零改动（reload/closed 接线与派发捕获既有）。"
+  checks:
+    - "第1轮红测试：node --test --test-name-pattern \"RP1\" tests/dsk-storage.test.cjs → 1（CE1/CE2/CE3/CE5 按预期红，2 对照绿；red-unfixed.log）→ 修后 0（6/6）"
+    - "第1轮：storage 47/47 → npm test 495/495 → build/prepare 0 → 桌面脚本第一轮 1（.part 全目录断言误伤 Phase5 硬杀残留，探针排除 reload 清理缺陷后精确化；日志同时含 FAIL 与 PHASE-OK，不得只引 OK）→ 第二轮 0（含 PHASE7 真实 reload 失效）"
+    - "第2轮红：pattern \"RP1 R0\" 在修前 service 快照回换实跑 → 1（R01 屏障不可布置+无回据固定、R02 reload 后备份仍发布；两 control 绿；red-verified-presnapshot.log；首次红跑 red-r01-r02.log 与死锁尝试 green-r01-r02*.log 原样保留）"
+    - "第2轮绿：同 pattern → 0（4/4：R01/R02 red 转绿 + rename-后-reload 如实成功 / 清理失败仍成功 两 control）"
+    - "第2轮：node --test tests/dsk-storage.test.cjs → 0（51/51）"
+    - "第2轮：npm test → 0（499/499）"
+    - "第2轮：npm run build（含 tsc --noEmit）→ 0；npm run desktop:prepare → 0"
+    - "第2轮：node scripts/test-dsk-storage-desktop.mjs → 0（全阶段含 PHASE7 真实 reload 失效通过）"
+    - "历史第3轮红：旧snapshot sha256=8b137b73...经esbuild outfile落盘加载+真实fsp门控，exit1：R01 revision2/nameOLD、R02 copies1；barrier只记录未assert，但本次确实进入并由review独立确认。旧red-verified-inmemory.log名称保留，不据文件名声称纯内存。"
+    - "历史第3轮绿：具名4/4 exit0，包含真实fsp屏障R01/R02及项目rename对照；其中旧r+持锁清理失败对照实为rm成功的假阳性，撤销故障覆盖声明，关联验证替代。"
+    - "第3轮：node --test tests/dsk-storage.test.cjs → 0（51/51）；npm test → 0（499/499）；业务语义未改，未重跑build/prepare/Electron（第2轮已过且此后仅注释与测试改动）"
+  key_evidence:
+    - "R2-01：reload 后迟到备份/恢复在修复前实测 ok:true 并发布/登记（红），修复后 fail storage-unavailable 且目标目录/项目列表不变（绿）"
+    - "复制迭代/登记前复核：CE3 store 注入在首个 streamFileToObject 触发 reload，修复后不登记、暂存对象清空、原项目 revision 不动"
+    - "提交原子仲裁：对照用例 commit 竞态 reload 两分支断言（ok⇒revision1 / !ok⇒revision0），既有 F04 abort 竞态回归保持"
+    - "已发布备份保留：reload/dispose 后备份目录与三件内容不变（对照）"
+    - "真实接线：PHASE7 真实 page.reload→did-start-loading，stale sessionId/transferId 拒绝、该传输 .part 清除、无新 .part、新代完整保存成功"
+  blockers: []
+review:
+  agent: director-reviewer
+  verdict: REPLAN
+  reference: "第1轮 agent_02369570 REWORK(R01/R02已关闭)；第2次审查 REWORK 仅 V01/V02，第3轮窄返工完成待最终复审；再不通过转 planner。最终复审 agent_321df250-c394-451a-b119-fd1fe13392af 判 REPLAN（不通过转 planner）：唯一阻断为验证问题——r+ 文件锁清理对照在本机不使 rm 失败且旧用例未 assert 实际失败，'真实EPERM'属假阳性；业务 A1-A4 经 reviewer 认可不重做。rework_rounds=2 与 REPLAN 历史永久保留，不做第三次隐形重置；关联验证任务 DSK-004-RP1-validation-01（planner agent_3e02c028 PLAN_READY、负责人 ExitPlanMode 批准）承接最小验证补正，原RP1不提前 PASS，生产代码本轮不动。"
+  findings:
+    - "R01(高)已修并经第2次审查独立关闭：提交后收尾并入主进程零await事件循环仲裁（回据固定expected+1、rename同轮次完成，非DB事务/跨进程原子——V02措辞已订正）。"
+    - "R02(中)已修并经第2次审查独立关闭：staging mkdir后/建库与首次复制前复核，取消仅清本次staging。"
+    - "V01历史结论已订正：第2轮新增DI红测无效；后续真实fsp屏障红测已独立确认revision=2/nameOLD、copies=1，但旧红runner只记录barrierReached而未assert，esbuild使用outfile落盘后加载，并非纯内存打包。原r+持锁EPERM对照为假阳性，其故障覆盖声明撤销，由关联DSK-004-RP1-validation-01的一次性精确路径模拟EPERM拒绝对照替代；不声称真实OS锁故障。旧日志保留。"
+    - "V02当前准确边界：主进程零await轮次仲裁不是同一DB事务或跨进程原子。旧attempt3日志元数据不全，旧npm日志仅摘要、并非逐条源hash；历史全量证据声明撤销。关联验证三份成功日志有CMD/UTC/CWD/源与测试hash/EXIT，首次SyntaxError原始输出被覆盖，仅有coder NOTE，永久保留该限制不补造。项目rename对照不等同备份文件rename竞态。"
+  unverified:
+    - "原生目录对话框真实 UI 失效场景留 RP8/人工边界（mock 未用于替代）。"
+  rework_rounds: 2

@@ -1,0 +1,83 @@
+task_id: DSK-004-RP2-ownership-01
+status: IMPLEMENTED # 编码与coder自验证完成，待独立director-reviewer审查；非PASS，父DSK-004仍REWORK，RP3未启动，未commit/push
+source_root: "E:/myProgram/DirectorDesk/director-desk-web"
+base_commit: "99c2582ee50e7abe1caa480628db360dd3fd9e66"
+initial_worktree: "继承RP1/RP2累计10tracked修改及10untracked文件；本轮plan更新与新关联任务单另纳入。编码前记录实际status/hash/字节快照，不clean或回HEAD。"
+parent_task: DSK-004-RP2
+parent_rework_rounds: 2
+parent_review_verdict: REPLAN
+approval:
+  approved: true
+  reference: "本会话ExitPlanMode明确批准RP2提示与重试协调最小重规划；planner agent_ebe0f86a PLAN_READY，原RP2两轮及REPLAN不重置。"
+goal: "提示pending禁止外部抢占；有效retry在当前尝试收尾后由唯一非递归调度者消费一次，连续失败不丢选择不双owner。"
+allowed_changes:
+  - "desktop/main.cjs仅createExitCoordinator及既有second-instance退出接线的ownership。"
+  - "tests/dsk-rp2-exit.test.cjs与scripts/test-dsk-rp2-exit-desktop.mjs仅必要ownership验证和产物核验。"
+  - "本任务单、原RP2任务最新状态、implementation/DSK-004-RP2.md、进度.md事实记录；新唯一tmp证据和现有构建产物。"
+non_goals:
+  - "不改service/integration/files/updates/update-host/src/preload/公共IPC/格式/依赖/代理配置。"
+  - "不重做已通过排空与RP1，不重跑SQLite gate，不真实安装更新，不强制产品退出。"
+  - "不提交推送，不覆盖旧日志或原两轮返工历史；若需扩大文件先BLOCKED申请。"
+design:
+  admission: "所有close/quit/second-instance/update准入同owner；notice pending不启动也不积压外部retry。"
+  scheduling: "一个非递归调度流程、一个attempt/所属notice、至多一个有效用户retry意图。提示只产决定，attempt和notice收尾后消费一次，禁止self-await/递归丢选择。"
+  callback: "状态改写前验归属；旧notice/finally/updater error不能清新owner授权。取消/错误BLOCKED锁定，不自动重试、不OPEN。"
+  update: "失败后只普通close不重装；prepareUpdateExit只为自己有效update授权true，不把普通close结果误报安装许可。"
+acceptance:
+  - id: O1
+    criterion: "F3真实原second-instance handler在finalize失败notice pending时与close/quit混合触发，drain/finalize保持1/1；答复retry后仅追加一次。"
+  - id: O2
+    criterion: "F4前2次finalize失败第3成功，两次提示retry准确消费：confirm1/notice2/drain3/finalize3，有界无递归。"
+  - id: O3
+    criterion: "第一/第二提示cancel或throw保BLOCKED锁且无授权，无自动追加，无未处理拒绝；提示完成后外部retry可用。"
+  - id: O4
+    criterion: "旧notice清理/迟到error与close/quit/second-instance/新答复竞争无额外动作或撤新授权；测试真正到达竞争断言。"
+  - id: O5
+    criterion: "正常update/同步throw/asyncerror回归，真实SQLite关库先fakeinstall保留；失败重试close安装不增加。"
+  - id: O6
+    criterion: "新prepared files/storage/exit桌面回归；PhaseC插桩与PhaseD自然退出准确区分，不冒充原生人工。"
+  - id: E1
+    criterion: "准确追加回填hash acda4adfede8cdeb0c4caf17450bd76589ad50539faa6d380bf7318ae8af3aad并声明非历史原样；旧2红case只是提示前置失败，不证明撤权/双owner。旧日志原样保留。"
+verification:
+  - "先新增有界F3/F4具名反例在启动时保存的真实未修main上跑红，释放全部自建屏障；再修main跑绿。"
+  - "node --experimental-strip-types --test tests/dsk-rp2-dispose.test.cjs tests/dsk-rp2-exit.test.cjs"
+  - "npm test"
+  - "npm run build"
+  - "npm run desktop:prepare"
+  - "node scripts/test-files-desktop.mjs"
+  - "node scripts/test-dsk-storage-desktop.mjs"
+  - "node scripts/test-dsk-rp2-exit-desktop.mjs"
+side_effects_approved:
+  - "现有本地构建产物、隔离测试库/profile、fake updater；无安装或真实付费业务。"
+rollback: "只撤本任务起始快照之后的精确增量，保留所有继承未跟踪文件及旧证据，不reset/clean。"
+implementation:
+  agent: director-coder
+  baseline: "99c2582（继承RP1/RP1-validation/RP2累计10tracked修改+10untracked原样保留）；本任务起始status与源hash已存证 tmp/dsk-004-rp2-ownership-01-20260918T081633Z/（git-status-at-start/end.txt 路径清单一致，未clean未reset）"
+  changed_files:
+    - desktop/main.cjs
+    - tests/dsk-rp2-exit.test.cjs
+    - .zcode/workflows/tasks/DSK-004-RP2-ownership-01.yaml
+    - .zcode/workflows/tasks/DSK-004-RP2.yaml
+    - implementation/DSK-004-RP2.md
+    - 进度.md
+    - "tmp/dsk-004-rp2-ownership-01-20260918T081633Z/（新唯一证据目录）"
+    - "现有构建产物（dist/、.audit/desktop-app 经 npm run build / desktop:prepare 正常再生）"
+  changes_summary: "main.cjs 仅 createExitCoordinator 及 second-instance 退出接线：删除 retrying 递归重试入口，改为唯一非递归 pump（一次尝试→唯一 owned notice→答案为至多一个用户 retry 决定，由循环消费一次，F4 连续失败不再丢第二次继续等待）；attemptDrain 容错排空异常、ownNotice 单飞并容纳提示崩溃（按取消保持BLOCKED锁定不循环）；startSequence 单一 flow 槽位（settled 即清空）+ containment belt；retryBlockedExit 三重守卫（BLOCKED 且无 pending notice 且无活动 flow，F3 提示挂起期间外部入口只拒不积压）；handleClose/handleQuit 同守卫；reportFinalActionFailure 先验归属（FINALIZING+kind+quitReady）再落地，其 notice 答案由 startSequence→pump 消费一次，update 失败降级 finalKind='close' 普通关窗；prepareUpdateExit 不变（BLOCKED 恒 false，普通 close 成功不会被误报为安装许可）；工厂内绑定模块级 exitCoordinator 使真实 second-instance 接线在生产与单测可达。tests/dsk-rp2-exit.test.cjs 新增 DSK_RP2_MAIN_ENTRY 快照入口、appListeners 捕获真实注册的 second-instance handler、3 个有界 ownership 测试（F3 混合触发+真实 handler 正向接线、F4 连续失败两次答案均消费）；finally 释放自建屏障无 OOM。桌面 exit 脚本零改动（marker 预检与全阶段对新载荷通过）。"
+  checks:
+    - "红（未修快照，red-f3f4-unfixed.log → 1）：24 用例 21 绿 + 恰 3 具名红有界（37.2s 无 OOM）：F3#22 失败于'drain 2 次'（提示挂起期间越权启动第二个尝试，行为性红因）；F3#23 失败于真实 handler 未达协调器（快照模块绑定仅由 createWindow 设置，单测环境如实在测例标注）；F4#24 失败于第二次继续等待被丢（BLOCKED 卡 2/2 排空/最终）。无新版 DI 漏接型红因"
+    - "修后 node --experimental-strip-types --test tests/dsk-rp2-dispose.test.cjs tests/dsk-rp2-exit.test.cjs → 0（38/38，green-units.log）"
+    - "npm test → 0（537/537，npm-test.log）"
+    - "npm run build → 0；npm run desktop:prepare → 0（载荷含修复，marker createExitCoordinator x4）"
+    - "node scripts/test-files-desktop.mjs → 0（9 检查；attempt1 经后台执行模式卡死于 playwright 连接、日志空白原样保留，按 PID 精确清理本任务自建进程后前台复跑通过——环境失败非产品缺陷）"
+    - "node scripts/test-dsk-storage-desktop.mjs → 0（全阶段含 RP1 不回归）"
+    - "node scripts/test-dsk-rp2-exit-desktop.mjs → 0（A1/A2/B/C1-C3/D 全过，C 插桩接线证据与 D 自然退出区分不变）"
+    - "E1 订正：复算确认 r2 pre-f1-fix 快照 sha256=acda4adf…（原 89a3294b… 有误），迟到error/竞争双owner 两旧红仅失败于'提示未出现'前置——已同步订正原 RP2 yaml/implementation报告/进度.md 结构化记录，旧日志未动"
+  blockers: []
+review:
+  agent: director-reviewer
+  verdict: PENDING
+  pause_record: "负责人要求冻结进度提交远程；agent_0437bb4f-cf75-47aa-a0d9-aec340ce30cc审查调用在返回结果前取消，未产生审查结论；不得视为PASS或新的REWORK。"
+  findings: []
+  unverified:
+    - "关联修订的独立代码/证据审查未完成，恢复后首先执行；RP3尚不得启动。"
+    - "原生人工交互/Windows11/断电/安装包等边界保留。"

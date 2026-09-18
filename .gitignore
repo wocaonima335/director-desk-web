@@ -110,6 +110,10 @@ file-locations.json
 # DSK-004 managed storage: real-Electron lease/snapshot verification entry (approved 004 scope).
 !/scripts/test-dsk-storage-desktop.mjs
 
+# DSK-004-RP2 exit coordination: real-Electron close/app.quit/blocked-drain verification entry
+# (approved RP2 scope).
+!/scripts/test-dsk-rp2-exit-desktop.mjs
+
 # This repository additionally tracks planning documents and the multi-agent
 # workflow configuration; upstream's source-only whitelist must not hide them.
 !/AGENTS.md

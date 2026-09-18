@@ -46,6 +46,11 @@ function attachIntegration(window) {
     // channel, never block app startup — every action then answers with the frozen failure shape.
     let storage = null;
     const storageVerifiers = { document: assertSceneDocument, canonical: canonicalJson, manifest: BackupManifestSchema };
+    // RP2: unpackaged test runs may shorten the real-clock exit-drain budget (mirrors the lease
+    // TTL override); packaged builds always use the service default. Applied at dispose time.
+    const disposeOverride = Number(process.env.DIRECTOR_STORAGE_DISPOSE_TIMEOUT_MS);
+    const defaultDisposeTimeoutMs = !app.isPackaged && Number.isFinite(disposeOverride) && disposeOverride >= 250
+        ? disposeOverride : undefined;
     const createService = root => {
         const ttlOverride = Number(process.env.DIRECTOR_STORAGE_LEASE_TTL_MS);
         return createStorageService({
@@ -108,6 +113,12 @@ function attachIntegration(window) {
     window.webContents.on('did-start-loading', () => { ready = false; host.stop(); void Promise.resolve(storage.closeFrameSessions()).catch(() => { }); for (const task of pending.values()) { clearTimeout(task.timer); task.resolve({ ok: false, execution: 'unknown', error: '页面重新载入，调用结果未确认；请重新读取工程，不要直接重复写入' }); } pending.clear(); });
     window.on('closed', () => { host.stop(); void mcp.close(); void Promise.resolve(storage.dispose()).catch(() => { }); for (const task of pending.values()) { clearTimeout(task.timer); task.resolve({ ok: false, execution: 'unknown', error: '软件已关闭，调用结果未确认；请重新读取工程，不要直接重复写入' }); }
         ipcMain.removeHandler('director-host'); ipcMain.removeHandler('director-dsk'); ipcMain.removeListener('director-tool-result', resultHandler); ipcMain.removeListener('director-tools-ready', readyHandler); });
-    return { isBusy: () => host.isRunning() || skillHost.isBusy() || pending.size > 0 || storage.isBusy() };
+    return {
+        isBusy: () => host.isRunning() || skillHost.isBusy() || pending.size > 0 || storage.isBusy(),
+        // RP2: unified exit drain entry for the coordinator in main.cjs. The first dispose call
+        // stops the service synchronously (RP1 generation invalidation) and returns the shared,
+        // bounded drain promise; blocked results are retryable through the same entry.
+        prepareExit: options => storage.dispose({ ...(defaultDisposeTimeoutMs !== undefined ? { timeoutMs: defaultDisposeTimeoutMs } : {}), ...(options || {}) }),
+    };
 }
 module.exports = { attachIntegration };

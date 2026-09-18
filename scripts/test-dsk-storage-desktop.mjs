@@ -58,7 +58,7 @@ const documentBytes = new TextEncoder().encode(documentJson).length;
 
 const LEASE_TTL_MS = 4000;
 const storageDir = path.join(root, 'tmp', `dsk-004-storage-lib-${process.pid}`);
-const profiles = [1, 2, 3, 4].map(index => path.join(root, 'tmp', `dsk-004-storage-profile-${process.pid}-${index}`));
+const profiles = [1, 2, 3, 4, 5].map(index => path.join(root, 'tmp', `dsk-004-storage-profile-${process.pid}-${index}`));
 for (const dir of [storageDir, ...profiles]) await fs.mkdir(dir, { recursive: true });
 
 const executable = require('electron');
@@ -623,6 +623,78 @@ try {
     console.log('PHASE6.6-OK: an unusable library surfaces the failure and skips legacy recovery at startup');
     await e.browser.close();
     await terminate(childE);
+
+    // --- Phase 7 (RP1): a REAL page reload must synchronously invalidate in-flight requests ---
+    // The real renderer reload fires did-start-loading in the real main process; every
+    // session-bound artifact (session, upload transfer, tmp file) must be gone, the stale
+    // session/transfer ids must not continue in the new generation, and fresh requests keep
+    // working (RP1-A1/A4). The native-dialog backup invalidation itself stays on the RP8 /
+    // manual boundary (CDP cannot drive the native directory picker).
+    const childG = launch(profiles[4]);
+    const g = await waitReady(childG, profiles[4]);
+    await g.page.evaluate(pageCallHelper);
+    const staleState = await g.page.evaluate(async payload => {
+        const call = window.__dskCall;
+        const created = await call('project.create', { name: '重载失效' });
+        if (!created.ok) return { stage: 'create', reply: created };
+        const sessionId = created.data.sessionId;
+        const begin = await call('storage.v1.upload.begin', { sessionId, expectedRevision: 0, declaredLength: payload.bytes });
+        if (!begin.ok) return { stage: 'begin', reply: begin };
+        const { transferId, chunkSize } = begin.data;
+        const bytes = new TextEncoder().encode(payload.json);
+        for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+            const slice = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+            let binary = '';
+            for (let i = 0; i < slice.length; i += 0x8000) binary += String.fromCharCode.apply(null, slice.subarray(i, i + 0x8000));
+            const chunk = await call('storage.v1.upload.chunk', { transferId, offset, data: btoa(binary) });
+            if (!chunk.ok) return { stage: 'chunk', reply: chunk };
+        }
+        return { projectId: created.data.projectId, sessionId, transferId };
+    }, { json: documentJson, bytes: documentBytes }).catch(error => ({ error: String(error) }));
+    if (!(expect(!staleState.error && !!staleState.projectId, `RP1 stale-transfer staging failed: ${JSON.stringify(staleState)}`))) { }
+    // Baseline BEFORE the reload: earlier phases may legitimately leave .part files behind when a
+    // process is hard-killed (taskkill /F cannot run any cleanup; the exit drain is RP2 scope).
+    // RP1 asserts the reload cleans exactly the transfer that is open HERE and creates nothing new.
+    const uploadsDir = path.join(storageDir, 'uploads');
+    const partsBeforeReload = fsSync.existsSync(uploadsDir) ? await fs.readdir(uploadsDir) : [];
+    await g.page.reload(); // real reload → real did-start-loading → real session invalidation
+    await g.page.waitForFunction(() => typeof window.directorDesktop?.dsk === 'function', undefined, { timeout: 30000 });
+    await g.page.evaluate(pageCallHelper);
+    const afterReload = await g.page.evaluate(async payload => {
+        const call = window.__dskCall;
+        return {
+            staleActivate: await call('storage.v1.session.activate', { sessionId: payload.sessionId }),
+            staleCommit: await call('storage.v1.upload.commit', { transferId: payload.transferId }),
+            reopened: await call('project.open', { projectId: payload.projectId }),
+        };
+    }, staleState).catch(error => ({ error: String(error) }));
+    if (!(expect(!afterReload.error, `RP1 post-reload evaluate failed: ${afterReload.error}`))) { }
+    expect(!afterReload.staleActivate.ok, `a stale session id must be refused after reload: ${JSON.stringify(afterReload.staleActivate)}`);
+    expect(!afterReload.staleCommit.ok, `a stale transfer id must be refused after reload: ${JSON.stringify(afterReload.staleCommit)}`);
+    // The fire-and-forget drain (handle close + tmp rm) is async — poll briefly, then require it done.
+    let partsAfterReload = fsSync.existsSync(uploadsDir) ? await fs.readdir(uploadsDir) : [];
+    for (let waited = 0; waited < 5000 && partsAfterReload.includes(`${staleState.transferId}.part`); waited += 200) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+        partsAfterReload = fsSync.existsSync(uploadsDir) ? await fs.readdir(uploadsDir) : [];
+    }
+    expect(!partsAfterReload.includes(`${staleState.transferId}.part`),
+        `the real reload must remove the open transfer's .part file (${staleState.transferId}.part)`);
+    const newParts = partsAfterReload.filter(name => name.endsWith('.part') && !partsBeforeReload.includes(name));
+    expect(newParts.length === 0, `the reload must leave no new .part files, found ${JSON.stringify(newParts)}`);
+    const freshGeneration = await g.page.evaluate(async payload => {
+        if (!payload.reopened.ok) return { reopened: payload.reopened };
+        const uploaded = await window.__dskUpload(payload.reopened.data.sessionId, payload.reopened.data.revision, payload.documentJson, '新代保存');
+        const status = await window.__dskCall('project.status', { projectId: payload.projectId });
+        return { uploaded, status };
+    }, { ...staleState, reopened: afterReload.reopened, documentJson }).catch(error => ({ error: String(error) }));
+    if (!(expect(!freshGeneration.error, `RP1 new-generation evaluate failed: ${freshGeneration.error}`))) { }
+    expect(freshGeneration.uploaded && freshGeneration.uploaded.commit && freshGeneration.uploaded.commit.ok,
+        `a new-generation save after reload must succeed: ${JSON.stringify(freshGeneration.uploaded)}`);
+    expect(freshGeneration.status && freshGeneration.status.ok && freshGeneration.status.data.revision === 1,
+        `the new-generation save must land revision 1: ${JSON.stringify(freshGeneration.status)}`);
+    console.log('PHASE7-OK (RP1): a real reload invalidated the open session/transfer (stale ids refused, .part cleaned) and a new-generation save committed revision 1');
+    await g.browser.close();
+    await terminate(childG);
     await fs.rm(importPath, { force: true });
     await fs.rm(corruptStorage, { force: true });
     console.log('PHASE6-BOUNDARY: backup/restore via the real UI still require the native directory picker (not CDP-drivable) and the uncertain-save reopen condition (status.revision > managed.revision) cannot be produced without a genuinely lost commit receipt — both stay on the manual verification boundary.');

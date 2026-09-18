@@ -1,0 +1,66 @@
+task_id: DSK-004-RP1-validation-01
+status: PASS # 关联验证最终复审通过，原RP1两轮与REPLAN历史保留
+source_root: "E:/myProgram/DirectorDesk/director-desk-web"
+base_commit: "99c2582ee50e7abe1caa480628db360dd3fd9e66"
+initial_worktree: "继承全部RP1代码/脚本/测试/进度/任务单与实施报告修改；批准计划文件本轮更新，主会话新增本关联任务。先实际核对保存，不假称clean。"
+parent_task: DSK-004-RP1
+parent_rework_rounds: 2
+parent_review_verdict: REPLAN
+approval:
+  approved: true
+  reference: "本会话ExitPlanMode明确批准RP1最小验证补正；planner agent_3e02c028-be4b-4491-84f3-a11b5c624f0e PLAN_READY。"
+goal: "确定性验证COMMIT后的清理异常确实发生且回据/DB保持成功一致，纠正假阳性与历史描述，不修改生产逻辑。"
+allowed_changes:
+  - "tests/dsk-storage.test.cjs仅必要fsp测试包装及清理失败对照。"
+  - "本关联任务、原RP1任务最新状态/关联、implementation/DSK-004-RP1.md、进度.md事实纠正。"
+  - "tmp下全新唯一验证目录与原测试harness正常临时数据。"
+non_goals:
+  - "不改service或其他生产源码/公共契约/依赖/锁文件/代理配置。"
+  - "不build/prepare/Electron/SQLite gate，不重跑历史红runner，不commit/push。"
+  - "不覆盖旧日志/源码快照，不抹去父任务两轮及REPLAN历史。"
+acceptance:
+  - "精确本次.part路径一次性fsp.rm Promise拒绝EACCES或EPERM，明确模拟注入非真实OS权限失败；断言实际命中次数1、路径相等、实际抛错code。其他路径透传。"
+  - "commit.ok成功，顶层revision/snapshot revision/snapshotId与真实DB getSnapshot/getProject的current一致。"
+  - "finally恢复本用例wrapper/注入状态，断言失败也不泄漏；不修改全局原生fsp.rm。"
+  - "新日志完整CMD/UTC/CWD/原始输出/真实退出码；一次源和测试hash清单可关联，前后确认被测文件不变。"
+  - "旧文件锁假阳性明确降级；旧红runner只是记录屏障、部分日志仅摘要无逐条源hash、esbuild outfile落盘非纯内存如实说明；旧证据保留。"
+verification:
+  - "node --test --test-name-pattern 'RP1 R0' tests/dsk-storage.test.cjs"
+  - "node --test tests/dsk-storage.test.cjs"
+  - "npm test"
+side_effects_approved:
+  - "现有单元测试临时数据库/esbuild bundle、新隔离证据；不启动产品或真实业务资源。"
+stop_conditions:
+  - "故障未命中/次数路径错误/DB不符/污染/测试失败则不得标通过，报告原因。"
+  - "若需生产代码/新依赖/扩围才能完成则BLOCKED交主会话。"
+rollback: "只撤本关联任务精确增量，保留原RP1全部代码及历史证据，不reset/clean。"
+parent_final_review:
+  verdict: REPLAN
+  reference: "agent_321df250-c394-451a-b119-fd1fe13392af（原RP1最终复审不通过转planner；唯一阻断为验证问题，业务A1-A4经reviewer认可不重做；父任务 rework_rounds=2 与 REPLAN 历史永久保留，不第三次隐形重置，原RP1不提前PASS。）"
+implementation:
+  agent: director-coder
+  changed_files:
+    - tests/dsk-storage.test.cjs（仅 fsp 包装扩展与清理失败对照重写+区段注释订正；R01/R02 屏障用例语义未改）
+    - ".zcode/workflows/tasks/DSK-004-RP1-validation-01.yaml（本任务单记录）"
+    - ".zcode/workflows/tasks/DSK-004-RP1.yaml（最新状态/关联记录）"
+    - implementation/DSK-004-RP1.md（验证修正与事实纠正）
+    - 进度.md（关联验证记录与事实纠正）
+    - "tmp/dsk-004-rp1-validation-01-20260917T075926Z/（新证据目录：status前后、diff-stat、5文件变更前备份、前后sha256、r+探针、3命令完整日志）"
+  checks:
+    - "node --test --test-name-pattern \"RP1 R0\" tests/dsk-storage.test.cjs → exit 0（4/4：R01/R02 屏障 + rename 对照 + 注入版清理对照；attempt1 于 2026-09-17T08:03:24.560Z 因文档注释内 glob \"*/\" 误闭合块注释 SyntaxError 在任何测试执行前退出 1，日志就地覆盖未保留已如实注明）"
+    - "node --test tests/dsk-storage.test.cjs → exit 0（51/51，无跳过）"
+    - "npm test → exit 0（499/499）"
+    - "探针 probe-filelock-rplus.cjs → exit 0：本机 node v22.14.0 持有 r+ 句柄时 fsp.rm(force) 仍成功删除文件——旧清理对照'真实EPERM'确为假阳性（旧用例仅 assert commit.ok，从未 assert rm 实际失败）"
+    - "desktop/storage/service.cjs 变更前后 sha256 一致（15f4d7484173b426b99abbbffb1adc49a6bdcb4080810dd2a31799beb81d5d32，cmp IDENTICAL）；未 build/prepare/Electron/gate，未 commit/push"
+  facts_recorded:
+    - "wrapper 扩展：rmRejectMatch 命中精确 .part 路径时返回注入的 Promise 拒绝（code EPERM/EACCES，error.simulated=true，消息含 SIMULATED，非真实 OS 权限失败），其他调用透传真实 fs；不改全局原生 fsp.rm。"
+    - "新清理对照断言：注入恰好 1 次、路径精确相等、实际抛错 code 为注入的 EACCES/EPERM、SIMULATED 标记、注入发生在真实登记之后（谓词在 rm 时刻捕获 db：revision 已=1 且 current.snapshotId=本次 snapshotId）、commit.ok=true、回据 revision=1/snapshot.revision=1、db.getSnapshot(...).revision=1、getProject current 一致；finally 先快照再恢复注入门，断言失败也不泄漏。"
+    - "旧声明降级（旧文件原样保留不补造）：旧红 runner red-runner-r3.cjs 只记录并打印 barrierReached（当时恰为 true）并未 assert；'内存 esbuild 打包'不准确——esbuild.build 带 outfile 落盘后 require；部分旧日志仅摘要无逐条 hash（full-storage-suite.log/npm-test.log 头部无源 hash，source-hashes.txt 仅 2 条）。"
+review:
+  agent: director-reviewer
+  verdict: PASS
+  reference: "agent_692dd733-70e4-492f-8029-30415a6c073c：V1-V6通过，D01管理记录订正关闭；独立storage51/51 exit0，生产/test摘要复核不变。可登记RP1局部PASS并进入RP2。"
+  findings:
+    - "E01非阻断永久限制：attempt1原始SyntaxError日志被覆盖，仅coder NOTE；不符合完整保留要求但现有成功证据及独立复跑足以支持局部验收，不补造。"
+  unverified:
+    - "不代表父DSK004整体PASS，不关闭RP8/UI/断电/安装包验收。"

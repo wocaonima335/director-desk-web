@@ -12,6 +12,12 @@
 // way instead of throwing inside a timer, and isBusy counts in-flight operations, not just
 // transfers (R10). Initialization failures must not block app startup, so
 // createUnavailableStorageService provides a diagnostic-only fallback.
+// RP2/R2: dispose is the awaitable, bounded, single-owner exit drain — it stops accepting requests
+// and advances the generation synchronously, drains in-flight handlers plus every tracked
+// cleanup (including cleanups detached from the transfer map) under an independent real-clock
+// budget, really retries every FAILED cleanup through an unresolved-resource ledger, and closes
+// the database only when nothing is pending or unaccounted; timeout/cleanup/db-close failures
+// return explicit blocked results with the database kept open and retryable.
 // Node-only module: Electron imports stay in integration.cjs; verification, canonicalization and
 // the backup-manifest schema are injected (they live in DOM-free TS modules bundled by esbuild).
 const fs = require('node:fs');
@@ -93,7 +99,8 @@ function createUnavailableStorageService(detail) {
         isBusy: () => false,
         sessionCount: () => 0,
         closeFrameSessions() { },
-        dispose() { },
+        // RP2: consistent dispose contract — nothing to drain and no database, resolves ready.
+        dispose() { return Promise.resolve({ ok: true }); },
         runInRequestContext: (_event, fn) => fn(),
         unavailable: true,
         _internal: null,
@@ -107,7 +114,9 @@ function createUnavailableStorageService(detail) {
  * root: managed library root directory (userData/managed in the product; isolated dir in tests).
  */
 function createStorageService({ root, verifiers, dialog, now = () => Date.now(), randomUUID = () => crypto.randomUUID(),
-    leaseTtlMs = 30000, leaseRenewMs = 10000, library, objects } = {}) {
+    leaseTtlMs = 30000, leaseRenewMs = 10000, library, objects,
+    removeTmp = target => fsp.rm(target, { force: true }),
+    ensureDir = target => fsp.mkdir(target, { recursive: true }) } = {}) {
     const requestContext = new AsyncLocalStorage();
     const store = objects ?? createObjectStore({ root });
     const db = library ?? openLibrary({ file: path.join(root, 'library.sqlite'), now });
@@ -115,20 +124,95 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
     const transfers = new Map(); // transferId -> transfer
     let pendingOperations = 0; // R10: in-flight handler operations (incl. dialog waits)
     let disposed = false;
+    // RP1: monotonically advancing request generation. Every dispatch captures the current
+    // value in its request context; closeFrameSessions()/dispose() advance it SYNCHRONOUSLY,
+    // so a reload/close instantly invalidates every in-flight token: late dialog returns,
+    // copy iterations, backup publishes and restore registrations observe the stale token
+    // and stop without writing, while new-generation requests keep working.
+    let frameGeneration = 0;
 
     const sweeper = setInterval(() => sweepTransfers(), Math.min(15000, Math.max(1000, Math.floor(STORAGE_UPLOAD_IDLE_MS / 4))));
     sweeper.unref?.();
+
+    // RP2: cleanup registry. Cancellations continue running AFTER their transfer left the map
+    // (sweeper timeouts, reload/abort fire-and-forget drains, session-close tmp deletions). The
+    // exit drain must wait for those too, so every cleanup promise that is not already covered
+    // by an awaited handler is tracked here and self-removes when settled.
+    const pendingCleanups = new Set();
+    const cleanupErrors = [];
+    function trackCleanup(promise) {
+        const entry = promise.then(
+            () => { pendingCleanups.delete(entry); },
+            error => { pendingCleanups.delete(entry); cleanupErrors.push(error); });
+        pendingCleanups.add(entry);
+        return promise;
+    }
+
+    // RP2-R2: ledger of cleanup resources that FAILED and are therefore still unaccounted for
+    // (a transfer handle that refused to close, a .part file that refused to be removed). An
+    // entry leaves this ledger ONLY when its resource is actually cleaned by a real retry —
+    // never by a later dispose resetting an error counter. While the ledger is non-empty the
+    // drain stays blocked and the database stays open.
+    const unresolvedCleanups = new Map(); // key -> { transfer, stage: 'close' | 'rm', error }
+    // RP2-F1: retry attempts run as OBSERVABLE IN-FLIGHT work. The drain starts them but never
+    // awaits them inline — a hanging close/rm must not stretch the drain past its real deadline.
+    // At most one attempt per resource may be in flight, across dispose calls. Attempts that
+    // are still running when the budget ends simply stay running (and stay accounted for).
+    const inflightCleanups = new Map(); // key -> attempt promise
+    let unresolvedSeq = 0;
+    let lastCleanupRetryStartedAt = 0;
+    function isAlreadyClosedError(error) {
+        return Boolean(error) && (error.code === 'ERR_STREAM_ALREADY_CLOSED' || /already closed/i.test(String(error && error.message)));
+    }
+    function recordUnresolvedCleanup(transfer, stage, error) {
+        cleanupErrors.push(error);
+        unresolvedCleanups.set(`${transfer.transferId}:${stage}:${unresolvedSeq++}`, { transfer, stage, error });
+    }
+    function startCleanupRetry(key, entry) {
+        if (inflightCleanups.has(key)) return; // never two concurrent attempts for one resource
+        const attempt = (async () => {
+            try {
+                if (entry.stage === 'close') {
+                    await entry.transfer.handle?.close();
+                } else {
+                    await fsp.rm(entry.transfer.tmpPath, { force: true });
+                }
+                unresolvedCleanups.delete(key); // the resource is REALLY accounted for now
+            } catch (error) {
+                if (entry.stage === 'close' && isAlreadyClosedError(error)) {
+                    unresolvedCleanups.delete(key); // the handle is provably closed: resolved
+                    return;
+                }
+                entry.error = error; // stays in the ledger for the next bounded attempt
+            } finally {
+                inflightCleanups.delete(key);
+            }
+        })();
+        inflightCleanups.set(key, attempt);
+    }
+    /** F1: START due retry attempts (bounded real-clock cadence) without awaiting them — the
+     * drain's overall deadline covers in-flight attempts through the size checks below. */
+    function startDueCleanupRetries() {
+        if (unresolvedCleanups.size === 0) return;
+        const at = Date.now();
+        if (at - lastCleanupRetryStartedAt < 100) return;
+        lastCleanupRetryStartedAt = at;
+        for (const [key, entry] of [...unresolvedCleanups]) startCleanupRetry(key, entry);
+    }
 
     function sweepTransfers() {
         const at = now();
         for (const transfer of [...transfers.values()]) {
             const idle = at - transfer.lastActivity > STORAGE_UPLOAD_IDLE_MS;
             const total = at - transfer.startedAt > STORAGE_TRANSFER_TOTAL_MS;
-            if (idle || total) void cancelTransfer(transfer, 'timeout');
+            if (idle || total) void trackCleanup(cancelTransfer(transfer, 'timeout'));
         }
     }
 
-    function currentEvent() { return requestContext.getStore() ?? null; }
+    function currentEvent() {
+        const token = requestContext.getStore();
+        return token ? token.event : null;
+    }
 
     function requireSession(sessionId) {
         if (disposed) throw Object.assign(Error('存储服务已停止'), { reason: 'storage-unavailable' });
@@ -160,8 +244,13 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
             else session.downloadTransferId = undefined;
         }
         if (transfer.kind === 'upload') {
-            try { await transfer.handle?.close(); } catch { /* already closed */ }
-            try { await fsp.rm(transfer.tmpPath, { force: true }); } catch { /* best effort */ }
+            // RP2/R2: cleanup failures are recorded in the unresolved-cleanup ledger and are
+            // surfaced through the exit drain as an explicit blocked result — and really retried
+            // by later drains — instead of vanishing or being written off by a fresh baseline.
+            try { await transfer.handle?.close(); }
+            catch (error) { if (!isAlreadyClosedError(error)) recordUnresolvedCleanup(transfer, 'close', error); }
+            try { await fsp.rm(transfer.tmpPath, { force: true }); }
+            catch (error) { recordUnresolvedCleanup(transfer, 'rm', error); }
         }
         transfer.aborted = reason;
     }
@@ -233,10 +322,12 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
         sessions.delete(sessionId);
         stopRenewal(session);
         // F04/F12: collect the cancellation promises so callers can drain tmp-file cleanup before
-        // closing the database or finishing navigation.
+        // closing the database or finishing navigation. RP2: every cancellation is also tracked
+        // in the cleanup registry, so fire-and-forget callers (reload, handler paths that drop
+        // the returned array) stay covered by the exit drain.
         const cancellations = [];
         for (const transfer of [...transfers.values()]) {
-            if (transfer.sessionId === sessionId) cancellations.push(cancelTransfer(transfer, 'session-closed'));
+            if (transfer.sessionId === sessionId) cancellations.push(trackCleanup(cancelTransfer(transfer, 'session-closed')));
         }
         if (session.leaseOwned && session.lease) {
             try { db.releaseLease(session.projectId, session.lease.owner, session.lease.generation); } catch { /* best effort */ }
@@ -245,8 +336,11 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
     }
 
     /** F04/F12: awaitable drain — every transfer cancellation (incl. tmp file removal) has
-     * settled when the returned promise resolves. */
+     * settled when the returned promise resolves. RP1: the generation advances BEFORE any
+     * await so invalidation is synchronous with the reload/close event (did-start-loading /
+     * dispose); the returned promise only covers the tmp-file draining. */
     function closeFrameSessions() {
+        frameGeneration += 1;
         return Promise.all([...sessions.keys()].flatMap(sessionId => closeSession(sessionId)));
     }
 
@@ -406,11 +500,16 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
             }
             // F04: the tmp file was opened after awaits — re-check that the session/frame is still
             // alive before answering success; a late success must not leak a handle or a .part.
-            if (!sessions.has(session.sessionId) || transfer.cancelled || !transfers.has(transferId)) {
+            // RP1: requestGone() also covers a generation bumped by a mid-flight reload/close.
+            if (!sessions.has(session.sessionId) || transfer.cancelled || !transfers.has(transferId) || requestGone()) {
                 // cancelTransfer early-returns for an already-removed transfer; close and clean
                 // up directly so neither the handle nor the .part file outlives the frame.
-                try { await transfer.handle?.close(); } catch { /* already closed */ }
-                try { await fsp.rm(tmpPath, { force: true }); } catch { /* best effort */ }
+                // RP2/R2: real failures here join the unresolved-cleanup ledger like everywhere
+                // else — only "already closed" is tolerated, never a genuine resource leak.
+                try { await transfer.handle?.close(); }
+                catch (error) { if (!isAlreadyClosedError(error)) recordUnresolvedCleanup(transfer, 'close', error); }
+                try { await fsp.rm(tmpPath, { force: true }); }
+                catch (error) { recordUnresolvedCleanup(transfer, 'rm', error); }
                 if (transfers.has(transferId)) await cancelTransfer(transfer, 'session-closed');
                 return fail('unknown-session', '存储会话已关闭，上传未创建');
             }
@@ -461,7 +560,9 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
             if (!transfer || transfer.kind !== 'upload') return fail('unknown-transfer', '上传会话不存在或已结束');
             const session = requireSession(transfer.sessionId);
             return enqueueTransferOperation(transfer, async () => {
-                if (transfer.cancelled || !sessions.has(session.sessionId)) {
+                // RP1: the generation-aware requestGone() joins every liveness re-check below, so
+                // a request dispatched in an older frame generation can never keep executing.
+                if (transfer.cancelled || !transfers.has(transfer.transferId) || !sessions.has(session.sessionId) || requestGone()) {
                     return fail('unknown-transfer', '传输已取消或会话已关闭');
                 }
                 if (transfer.received !== transfer.declaredLength) {
@@ -478,7 +579,8 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                 }
                 // F04: re-check liveness after every await — an abort that landed while this
                 // operation was queued or awaiting must win, never the late commit.
-                if (transfer.cancelled || !transfers.has(transfer.transferId) || !sessions.has(session.sessionId)) {
+                // RP1: requestGone() extends this to a generation bumped by reload/close.
+                if (transfer.cancelled || !transfers.has(transfer.transferId) || !sessions.has(session.sessionId) || requestGone()) {
                     return fail('unknown-transfer', '传输已取消或会话已关闭');
                 }
                 if (bytes.length !== transfer.declaredLength) {
@@ -511,12 +613,15 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                     return projectErrorToFailure(error);
                 }
                 // F04: the object write awaited — the abort may have landed in that window.
-                if (transfer.cancelled || !transfers.has(transfer.transferId) || !sessions.has(session.sessionId)) {
+                // RP1: last cancellable point before the registration boundary; requestGone()
+                // joins the check so a mid-flight reload/close wins over the late commit.
+                if (transfer.cancelled || !transfers.has(transfer.transferId) || !sessions.has(session.sessionId) || requestGone()) {
                     return fail('unknown-transfer', '传输已取消或会话已关闭');
                 }
-                try { await fsp.rm(transfer.tmpPath, { force: true }); } catch { /* best effort */ }
-                // From here the commit is finalizing: the transfer leaves the map FIRST, so a late
-                // abort can no longer observe or cancel it.
+                // RP1: final atomic arbitration. Nothing may await between this re-check and the
+                // synchronous db.commitSnapshot return, so a reload/close can never slip into the
+                // registration window; a transfer that lost the race never registers (no cancel
+                // success followed by a late commit).
                 transfers.delete(transfer.transferId);
                 session.uploadTransferId = undefined;
                 try {
@@ -529,22 +634,32 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                         now,
                     });
                 } catch (error) {
+                    try { await removeTmp(transfer.tmpPath); } catch { /* best effort */ }
                     // Object may be published while registration failed: it stays an untrusted orphan.
                     return projectErrorToFailure(error);
                 }
-                // F07: the commit transaction returned, so the snapshot is provably registered and
-                // the revision is derived by the transaction's own guards. The getProject receipt
-                // is best-effort: a receipt read failure must never downgrade a proven commit into
-                // a retryable failure.
-                let project = null;
-                try { project = db.getProject(transfer.projectId); } catch { /* receipt unavailable */ }
-                const revision = project ? Number(project.revision) : transfer.expectedRevision + 1;
-                if (transfer.name && project && project.name !== transfer.name) {
+                // RP1/R01: the ENTIRE post-commit receipt section stays inside the same synchronous
+                // arbitration section — NO await — so a reload cannot split it:
+                // - the receipt revision is pinned to THIS request's own commit (expectedRevision+1,
+                //   enforced by the commitSnapshot guards); reading the project row after a later
+                //   await could observe a NEWER revision saved by a new generation and forge a
+                //   receipt pairing this request's snapshotId with that future revision;
+                // - this request's project rename is arbitrated in the SAME main-process, zero-await
+                //   event-loop turn as the registration (same JS turn, NOT one database transaction
+                //   and NOT cross-process atomicity — other processes are still fenced by the lease);
+                //   it therefore cannot run after a reload handed the project to a new generation;
+                // - from here the commit is provably registered (F07): the tmp cleanup below may
+                //   suspend or fail freely and must never be reported as an uncommitted save.
+                const revision = transfer.expectedRevision + 1;
+                let currentName = null;
+                try { currentName = db.getProject(transfer.projectId)?.name ?? null; } catch { /* receipt unavailable */ }
+                if (transfer.name && currentName && currentName !== transfer.name) {
                     try { db.renameProject(transfer.projectId, transfer.name); session.name = transfer.name; } catch { /* rename is best effort */ }
                 }
                 const snapshotRef = { version: 'dsk.v1', snapshotId, projectId: transfer.projectId, revision, digest, createdAt };
                 session.revision = revision;
                 session.current = snapshotRef;
+                try { await removeTmp(transfer.tmpPath); } catch { /* best effort; the commit stands */ }
                 return ok('storage.v1.upload.commit', { snapshot: snapshotRef, revision });
             });
         },
@@ -601,7 +716,8 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                 }
                 const bytes = await store.getObject(session.projectId, snapshot.digest, snapshot.length);
                 // F04: the object read awaited — re-check that this transfer is still the live one.
-                if (transfer.cancelled || !transfers.has(transferId) || !sessions.has(session.sessionId)) {
+                // RP1: requestGone() extends this to a generation bumped by reload/close.
+                if (transfer.cancelled || !transfers.has(transferId) || !sessions.has(session.sessionId) || requestGone()) {
                     return fail('unknown-transfer', '下载已取消或结束');
                 }
                 transfer.bytes = bytes;
@@ -660,7 +776,16 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
             const finalDir = path.join(chosen, `director-desk-backup-${new Date(now()).toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`);
             const stagingDir = path.join(chosen, `.staging-${randomUUID()}`);
             try {
-                await fsp.mkdir(path.join(stagingDir, 'objects'), { recursive: true });
+                await ensureDir(path.join(stagingDir, 'objects'));
+                // RP1/R02: the staging creation awaited — re-check BEFORE the backup database is
+                // created or the FIRST object is copied. An invalidation during the staging mkdir
+                // must leave zero copies and zero published directories; only this request's own
+                // staging directory is removed and existing data is untouched.
+                const goneBeforeStaging = requestGone();
+                if (goneBeforeStaging) {
+                    try { await fsp.rm(stagingDir, { recursive: true, force: true }); } catch { /* best effort */ }
+                    return fail('storage-unavailable', `${goneBeforeStaging}，备份未发布`);
+                }
                 createBackupDatabase(path.join(stagingDir, 'library.sqlite'), {
                     project: {
                         projectId: view.project.projectId,
@@ -681,6 +806,13 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                     await store.streamObjectToFile(view.project.projectId, snapshot.digest, snapshot.length,
                         path.join(stagingDir, 'objects', `${snapshot.digest}.json`));
                     objects.set(snapshot.digest, { digest: snapshot.digest, length: snapshot.length });
+                    // RP1: 复制迭代完成复核 — a reload/close that landed during the copy stops the
+                    // staging here; the staging directory is cleaned and nothing is published.
+                    const goneMidCopy = requestGone();
+                    if (goneMidCopy) {
+                        try { await fsp.rm(stagingDir, { recursive: true, force: true }); } catch { /* best effort */ }
+                        return fail('storage-unavailable', `${goneMidCopy}，备份未发布`);
+                    }
                 }
                 const manifest = {
                     version: 'director-desk-backup.v1',
@@ -692,7 +824,10 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                     objects: [...objects.values()],
                 };
                 await fsp.writeFile(path.join(stagingDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
-                // F12: publish only into a still-live context; late returns clean up staging.
+                // F12/RP1: publish only into a still-live context; late returns clean up staging.
+                // This is the backup's LAST cancellable point — once the rename starts the publish
+                // is committed: there is no cancellation past it, the result is reported truthfully
+                // (F07-style receipt) and no cleanup path may delete the published directory.
                 const goneBeforePublish = requestGone();
                 if (goneBeforePublish) {
                     try { await fsp.rm(stagingDir, { recursive: true, force: true }); } catch { /* best effort */ }
@@ -757,13 +892,17 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
         return result.filePaths[0];
     }
 
-    /** F12: after every await (dialog pick, staging writes) the requesting context is re-checked:
-     * a disposed service or a destroyed sender frame must never publish a backup or register a
-     * restore. Returns a human reason when the request has lost its context, null otherwise. */
+    /** F12/RP1: after every await (dialog pick, copy iteration, staging writes) the requesting
+     * context is re-checked: a disposed service, a request captured in a superseded frame
+     * generation (reload/close advanced it) or a destroyed sender frame must never publish a
+     * backup, register a restore or commit a transfer. Returns a human reason when the request
+     * has lost its context, null otherwise. A missing token (direct internal call) keeps the
+     * legacy disposed/destroyed behavior only. */
     function requestGone() {
         if (disposed) return '存储服务已停止';
-        const event = currentEvent();
-        if (event && event.sender && typeof event.sender.isDestroyed === 'function' && event.sender.isDestroyed()) {
+        const token = requestContext.getStore();
+        if (token && token.generation !== frameGeneration) return '页面已重新载入';
+        if (token && token.event && token.event.sender && typeof token.event.sender.isDestroyed === 'function' && token.event.sender.isDestroyed()) {
             return '页面已关闭';
         }
         return null;
@@ -922,14 +1061,27 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
         // Register as a brand-new project with remapped ids; objects are streamed into the new
         // project directory (hash verified while streaming) and re-read for proof before the
         // single registration transaction (R3: 校验后替换防护).
+        // RP1: 复制开始/迭代完成/登记前复核 — every check throws a live-request error that the
+        // caller maps onto the frozen storage-unavailable shape; the staged new project
+        // directory is removed by the catch below, and the original projects and existing
+        // backups stay untouched.
+        const requireLiveRequest = () => {
+            const gone = requestGone();
+            if (gone) throw Object.assign(Error(`${gone}，恢复未登记`), { reason: 'storage-unavailable' });
+        };
         const newProjectId = randomUUID();
         const idMap = new Map(manifestData.snapshots.map(s => [s.snapshotId, randomUUID()]));
+        requireLiveRequest(); // 复制开始前
         try {
             for (const object of manifestData.objects) {
                 await store.streamFileToObject(path.join(objectsDir, `${object.digest}.json`), newProjectId, object.digest, object.length);
                 // Copy-then-re-read: the published bytes must still hash/verify as expected.
                 await store.getObject(newProjectId, object.digest, object.length);
+                requireLiveRequest(); // 复制迭代完成复核
             }
+            // 恢复 DB 登记前的最后复核：runImmediate 的注册事务同步完成，此处与事务之间没有 await，
+            // 复核通过后不存在可插入的失效窗口（已开始登记即不可取消，结果如实返回）。
+            requireLiveRequest();
             const currentSnapshot = manifestData.snapshots.find(s => s.snapshotId === inspected.project.currentSnapshotId);
             await db.restoreProject({
                 project: {
@@ -950,6 +1102,11 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
             });
         } catch (error) {
             try { await store.removeProject(newProjectId); } catch { /* best effort */ }
+            // RP1: removeProject clears the staged objects; also drop the now-empty project
+            // shell so a cancelled restore leaves nothing behind. rmdir only succeeds when the
+            // directory is EMPTY, so this can never delete staged object bytes or user data —
+            // best effort, ignored when the shell is gone or not empty.
+            try { await fsp.rmdir(path.join(root, 'projects', newProjectId), { force: true }); } catch { /* best effort */ }
             throw error;
         }
         return {
@@ -960,19 +1117,89 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
         };
     }
 
-    /** F12: draining dispose — transfers (incl. tmp cleanup) are awaited, in-flight handlers get
-     * a bounded grace period, and only then does the database close. Late handler returns observe
-     * `disposed` and never publish a backup or register a restore afterwards. */
-    async function dispose() {
-        if (disposed) return;
-        disposed = true;
-        clearInterval(sweeper);
-        try { await closeFrameSessions(); } catch { /* best effort */ }
-        const deadline = now() + 10000;
-        while (pendingOperations > 0 && now() < deadline) {
-            await new Promise(resolve => setTimeout(resolve, 25));
+    // --- RP2: awaitable, bounded, single-owner exit drain -----------------------------
+    const DISPOSE_DEFAULT_TIMEOUT_MS = 10000;
+    let drainPromise = null;   // in-flight (or last blocked) drain; retryable after a blocked result
+    let closedResult = null;   // cached success: the database was closed exactly once
+
+    async function performDrain(timeoutMs) {
+        // The drain budget is an independent REAL wall clock. The injectable business clock
+        // (`now`) may be frozen (tests, suspended clocks) and must never control the exit wait.
+        const deadline = Date.now() + timeoutMs;
+        let sessionDrainSettled = false;
+        // NOTE: the aggregate is deliberately NOT registered into pendingCleanups — that would
+        // make the drain wait on itself (the per-cancellation promises are tracked instead).
+        void closeFrameSessions().then(
+            () => { sessionDrainSettled = true; },
+            () => { sessionDrainSettled = true; });
+        // One bounded loop covers session cancellations, in-flight handlers, every tracked
+        // cleanup AND every unresolved failed cleanup. Failed cleanups are STARTED as
+        // non-blocking in-flight retries on a bounded cadence — the loop never awaits a retry
+        // inline, so a hanging close/rm cannot stretch the wait past the deadline. Past the
+        // deadline no NEW attempts are started; running/failed/pending work stays accounted.
+        while (Date.now() < deadline) {
+            startDueCleanupRetries();
+            if (sessionDrainSettled && pendingOperations === 0 && pendingCleanups.size === 0 && transfers.size === 0 && unresolvedCleanups.size === 0 && inflightCleanups.size === 0) break;
+            await new Promise(resolve => setTimeout(resolve, 10));
         }
-        try { db.close(); } catch { /* already closed */ }
+        if (unresolvedCleanups.size > 0 || inflightCleanups.size > 0) {
+            const last = cleanupErrors[cleanupErrors.length - 1];
+            return {
+                ok: false,
+                blocked: 'cleanup-failed',
+                detail: `退出期间后台清理失败且尚未解决（失败未解决 ${unresolvedCleanups.size} 项，重试进行中 ${inflightCleanups.size} 项，最近错误：${last && last.code ? last.code : '未知错误'}），失败资源保持记账、进行中的重试不打断；项目库保持打开。`,
+                unresolvedCleanups: unresolvedCleanups.size,
+                inflightCleanups: inflightCleanups.size,
+            };
+        }
+        if (!sessionDrainSettled || pendingOperations > 0 || pendingCleanups.size > 0 || transfers.size > 0) {
+            return {
+                ok: false,
+                blocked: 'timeout',
+                detail: `退出等待超时：仍有未完成的存储操作（会话排空：${sessionDrainSettled ? '已完成' : '进行中'}，处理中：${pendingOperations}，后台清理：${pendingCleanups.size}，传输：${transfers.size}）。项目库保持打开，可重试等待。`,
+                pending: { handlers: pendingOperations, cleanups: pendingCleanups.size, transfers: transfers.size },
+            };
+        }
+        // db.close() is synchronous and may throw: the error becomes an explicit blocked result.
+        // It is never swallowed into a fake normal close, and the library is never reopened.
+        try { db.close(); } catch (error) {
+            return { ok: false, blocked: 'db-close-failed', detail: `项目库关闭失败：${error && error.message ? error.message : error}` };
+        }
+        return { ok: true, cleanupErrors: cleanupErrors.length };
+    }
+
+    /** RP2/R2: the only path that stops the service. Synchronously, before its first await, it
+     * refuses new requests, advances the frame generation (RP1 invalidation) and stops the
+     * sweeper. It then drains handlers, tracked cleanups and every unresolved failed cleanup
+     * (genuinely retried on a bounded cadence) within a REAL bounded budget and closes the
+     * database only when NOTHING is pending or unaccounted. Timeout, cleanup failure and a
+     * throwing db.close() return an explicit blocked result with the database left OPEN; a
+     * later call retries in a controlled way (it waits on and retries the SAME original work —
+     * no reopen, no baseline reset that would write off failed resources). Concurrent/repeat
+     * calls share one in-flight promise; success is cached. */
+    function dispose({ timeoutMs } = {}) {
+        if (closedResult) return Promise.resolve(closedResult);
+        if (!drainPromise) {
+            disposed = true;
+            frameGeneration += 1;
+            clearInterval(sweeper);
+            const budget = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DISPOSE_DEFAULT_TIMEOUT_MS;
+            const promise = (async () => {
+                try { return await performDrain(budget); }
+                catch (error) {
+                    return { ok: false, blocked: 'internal', detail: `退出排空内部错误：${error && error.message ? error.message : error}` };
+                }
+            })();
+            drainPromise = promise;
+            void promise.then(result => {
+                if (result && result.ok === true) closedResult = result;
+                if (drainPromise === promise) drainPromise = null; // blocked results become retryable
+            }, () => {
+                if (drainPromise === promise) drainPromise = null;
+            });
+            return promise;
+        }
+        return drainPromise;
     }
 
     return {
@@ -982,10 +1209,22 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
         pendingOperationCount: () => pendingOperations,
         closeFrameSessions,
         dispose,
-        /** Bind one trusted IPC event to the storage request context for the duration of a dispatch. */
-        runInRequestContext: (event, fn) => requestContext.run(event, fn),
+        /** Bind one trusted IPC event to the storage request context for the duration of a dispatch.
+         * RP1: the context token captures the current frame generation next to the event, so every
+         * request carries the generation it was created in and can detect invalidation later. */
+        runInRequestContext: (event, fn) => requestContext.run({ event, generation: frameGeneration }, fn),
         // Test/inspection hooks (not part of the IPC surface).
-        _internal: { sessions, transfers, db, store, sweepTransfers },
+        _internal: {
+            sessions, transfers, db, store, sweepTransfers,
+            frameGeneration: () => frameGeneration,
+            // RP2 exit-drain state: 'open' | 'draining' | 'ready' | 'blocked-retryable'.
+            drainState: () => closedResult ? 'ready'
+                : drainPromise ? 'draining' : 'blocked-retryable',
+            pendingCleanupCount: () => pendingCleanups.size,
+            unresolvedCleanupCount: () => unresolvedCleanups.size,
+            inflightCleanupCount: () => inflightCleanups.size,
+            dbOpen: () => { try { db.listProjects({ limit: 1 }); return true; } catch { return false; } },
+        },
     };
 }
 

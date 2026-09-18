@@ -2,9 +2,11 @@
 
 记录日期：2026-09-15。
 
-## 最新状态：DSK-004 第1轮返工暂停检查点
+## 最新状态：RP1 PASS、RP2关联修订待审的冻结检查点
 
-以根目录[进度.md](../进度.md)及[DSK-004实施报告](DSK-004.md)为当前依据。DSK-001～003技术PASS，SQLite门禁独立PASS；DSK-004产品首轮审查REWORK，A段修复已有coder验证（470测试及桌面回归），B段未完成、整体未复审。按负责人要求保存GitHub检查点，不代表产品验收或发布。
+以根目录[进度.md](../进度.md)、[RP1实施报告](DSK-004-RP1.md)、[RP2实施报告](DSK-004-RP2.md)为当前依据。DSK-001～003及SQLite门禁既有PASS保留；父DSK-004仍REWORK。RP1及关联验证独立PASS；RP2两轮后REPLAN，其ownership-01关联修订已实施、coder记录537项测试通过，但最新独立审查被取消无结论。RP3～RP8尚未开始。
+
+按负责人要求冻结并提交`checkpoint/dsk-003-progress`，不代表验收或发布。恢复第一步为独立审查ownership-01，不重复编码或直接进入RP3。原始tmp日志与prepared产物不随Git同步。下方旧A/B及门禁状态均为历史，不覆盖本段。
 
 下文是前一轮机器/分支检查点的历史，尤其旧SQLite门禁REWORK和003返工描述不应覆盖最新结论；当前实际工作目录为`E:/myProgram/DirectorDesk/director-desk-web`。
 

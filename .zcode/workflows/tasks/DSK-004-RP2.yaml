@@ -1,0 +1,121 @@
+task_id: DSK-004-RP2
+title: "确认保存后可等待的存储排空与统一退出"
+status: REPLAN # 两次返工后最终独立审查未通过；F3/F4由获批ownership-01关联修订承接，尚待审，父任务REWORK
+source_root: "E:/myProgram/DirectorDesk/director-desk-web"
+base_commit: "99c2582ee50e7abe1caa480628db360dd3fd9e66"
+initial_worktree: "继承RP1/关联验证全部未提交源码测试与记录、当前会话已批准计划；主会话新增RP2任务单。编码前保存实际status及相关文件快照，不回HEAD覆盖。"
+contract_version: "公共IPC/preload/renderer/schema均不变；仅主进程内部退出接口"
+approval:
+  approved: true
+  reference: "远程RP1-RP8总体计划已批准；本会话ExitPlanMode又明确批准files.cjs内部接口/clean idle退出确认UX/三个测试文件及精确ignore例外。"
+goal: "保存或丢弃确认先于停止服务；普通close/app.quit/update三入口等待所有请求及后台清理和DB关闭，才最终退出。超时不关仍在使用的DB，不假正常关闭。"
+context_files:
+  - "AGENTS.md"
+  - ".zcode/workflows/README.md"
+  - ".zcode/plans/plan-sess_0f45933a-bf18-47df-952f-6fdc936de21f.md"
+  - ".zcode/plans/plan-sess_eb0067fe-a560-495d-9531-9beb2e0d04fe.md"
+  - ".zcode/workflows/tasks/DSK-004-RP1-validation-01.yaml"
+  - "desktop/storage/service.cjs"
+  - "desktop/integration.cjs"
+  - "desktop/main.cjs"
+  - "desktop/files.cjs"
+  - "desktop/updates.cjs"
+  - "desktop/update-host.cjs"
+allowed_changes:
+  - "desktop/storage/service.cjs、desktop/integration.cjs、desktop/main.cjs、desktop/updates.cjs、desktop/files.cjs，仅RP2内部生命周期。"
+  - "新增tests/dsk-rp2-dispose.test.cjs、tests/dsk-rp2-exit.test.cjs、scripts/test-dsk-rp2-exit-desktop.mjs。"
+  - ".gitignore必要时仅新增桌面脚本的精确白名单。"
+  - "本任务单implementation、implementation/DSK-004-RP2.md、进度.md最新RP2记录；新唯一tmp证据与正常构建生成物。"
+non_goals:
+  - "不改src/preload/公共IPC/数据库格式/package/lock/代理配置/相邻仓库，不做RP3-RP8。"
+  - "不改update-host，使用已await的confirmInstall接入排空；不实际下载安装。"
+  - "不强制产品退出、不window.destroy、不清dirty绕确认、不timeout后强关DB或重建库假恢复。"
+  - "不覆盖旧gate/审查证据、不commit/push。"
+design:
+  confirmation: "files内部await确认，复用既有save-close IPC；clean idle也确认。取消/保存失败保留窗口及可用service；重复确认共享Promise，旧frame/requestId回执拒绝；回执不再自行window.close。"
+  service: "首个await前停止接单/推进generation/停止定时器；pendingOperations和独立cleanup registry全排空。真实独立timeout覆盖整个等待，不用业务now；重复dispose共享Promise，成功close一次，失败blocked。"
+  cleanup: "跟踪从transfer map移除后的cleanup及reload/sweeper/abort已有工作，等待期间新增cleanup也计入，避免自等待队列死锁。"
+  coordinator: "main中OPEN/CONFIRMING/DRAINING/READY/FINALIZING及BLOCKED；close/beforequit同步拦截；单一最终动作所有者；成功才放行。drain后锁交互，blocked原生提示+用户重试，不恢复已停service编辑。"
+  updates: "confirmInstall确认后await统一prepare，只有取得update所有权且READY才true；install同步验证一次授权后quitAndInstall；模拟失败受阻，不访问真实更新。"
+acceptance:
+  - id: A1
+    criterion: "具名未修反例与修后结果可追溯；固定业务clock、pending和脱离map cleanup在超时内返回blocked，DB未关。"
+  - id: A2
+    criterion: "重复dispose共享结果；超时后受控重试；cleanup/db.close错误显式blocked；排空和DB关闭成功恰一次。"
+  - id: A3
+    criterion: "用户取消/保存取消/保存失败不停止service；成功保存先于drain；丢弃明确确认；旧回执不触发退出。"
+  - id: A4
+    criterion: "close/app.quit/update重入竞争唯一最终动作；未完成drain不可毁窗或调用installer。"
+  - id: A5
+    criterion: "模拟更新通过真实updates接线证明closeDB先于install，取消/timeout/error零安装，不实际安装更新。"
+  - id: A6
+    criterion: "真实Electron关窗/app.quit及保存链路、blocked留窗验证；原生交互与mock证据区分，RP1保护不回归。"
+verification:
+  - "node --experimental-strip-types --test tests/dsk-rp2-dispose.test.cjs tests/dsk-rp2-exit.test.cjs"
+  - "npm test"
+  - "npm run build"
+  - "npm run desktop:prepare"
+  - "node scripts/test-files-desktop.mjs"
+  - "node scripts/test-dsk-storage-desktop.mjs"
+  - "node scripts/test-dsk-rp2-exit-desktop.mjs"
+side_effects_approved:
+  - "现有本地构建/生成物，隔离测试库/profile/Electron/回环和fake updater；不真实外网服务。"
+dependencies:
+  - "RP1及validation-01最终PASS（agent_692dd733），原两轮REWORK/REPLAN及日志限制保留。"
+rollback: "只撤本任务增量，不reset/clean，不覆盖RP1或原用户数据。"
+implementation:
+  agent: director-coder
+  baseline: "99c2582（继承RP1/validation-01全部未提交改动原样保留）；前次RP2会话（agent_c9e95a7a，被打断）已实现五文件+两测试并留首轮红绿证据 tmp/dsk-004-rp2-coder-20260917T091520Z/（修前快照 sha256 service 15f4d748…/files c16b9bbf…）；本续接会话证据 tmp/dsk-004-rp2-coder-20260918T013213Z/（逐命令 CMD/UTC/CWD/EXIT）"
+  changed_files:
+    - desktop/files.cjs
+    - desktop/main.cjs
+    - desktop/storage/service.cjs
+    - desktop/integration.cjs
+    - desktop/updates.cjs
+    - tests/dsk-rp2-dispose.test.cjs
+    - tests/dsk-rp2-exit.test.cjs
+    - scripts/test-dsk-rp2-exit-desktop.mjs
+    - .gitignore
+    - implementation/DSK-004-RP2.md
+    - 进度.md
+    - .zcode/workflows/tasks/DSK-004-RP2.yaml
+  changes_summary: "files.cjs 共享可等待确认（回执仅解析自身id、不自行关窗、取消/保存失败保持可用、clean idle也确认、共享Promise、reload作废）；main.cjs createExitCoordinator 状态机（close/before-quit 同步拦截、重入并入单一流程、blocked 原生提示+同额预算重试、排空锁交互、恰一次最终动作、update 仅 READY 后交 quitAndInstall）；service.cjs dispose（同步拒新+推进generation+停sweeper，会话/handler/脱离map及等待期新增清理全排空，独立真实时钟预算，blocked显式且DB保持打开，共享Promise恰一次关闭、可控重试）；integration.cjs prepareExit 接线+非打包测试预算覆盖；updates.cjs confirmInstall 后 await prepareUpdateExit（取消/受阻零安装）。公共IPC/preload/renderer/schema/依赖/update-host 零改动。"
+  checks:
+    - "红反例（前会话 red-ce-attempt2.log）：DSK_RP2_SERVICE_ENTRY/FILES_ENTRY 指向归档修前快照 → 退出1（CE1—CE4 按预期红，失败为旧行为断言；attempt1 快照兄弟模块解析 harness 失败原样保留注明）"
+    - "node --experimental-strip-types --test tests/dsk-rp2-dispose.test.cjs tests/dsk-rp2-exit.test.cjs → 0（23/23，CE1—CE4 转绿；green-rp2-units.log）"
+    - "npm test → 0（522/522；npm-test.log）"
+    - "npm run build → 0（npm-build.log）；npm run desktop:prepare → 0（desktop-prepare.log，新产物经 RP2 标记预检）"
+    - "node scripts/test-files-desktop.mjs → 0（9检查含 save finishes before exit / discard unchanged；desktop-files.log）"
+    - "node scripts/test-dsk-storage-desktop.mjs → 0（全阶段含 RP1 PHASE7 不回归；desktop-storage.log）"
+    - "node scripts/test-dsk-rp2-exit-desktop.mjs → 0（真实 Electron：取消留窗+服务可用 / 保存→排空→关窗→退出真实写盘 / app.quit 单一流程 / blocked 原生提示+诚实停服+受控重试；exit-desktop.log；对话框 stub 已标记为 mock，原生人工交互留 RP8/人工边界）"
+    - "exit 脚本开发期 4 次尝试（evaluate require、上传阻塞被 closeFrameSessions 取消、断言字段错位）日志如实保留，最终以全新 prepare 产物复跑通过"
+  rework_round1:
+    issues: "R1 停服后受阻取消/异常错误解锁回OPEN；R2 清理失败被下轮dispose基线重置忽略（持续失败伪成功关库）；R3 finalizeClose抛与updater同步throw/异步error后授权残留、永远FINALIZING"
+    fixes: "main.cjs BLOCKED态（停服后一切失败路径保持锁定，确认前异常仍可用；close/quit/second-instance三种受控重试入口，重试不二次确认；reportFinalActionFailure清一次性授权，update失败重试降级正常关窗）；service.cjs 未解决清理台账（close/rm分阶段真实重试100ms有界节奏，台账非空blocked且DB保持打开，already-closed容忍，begin迟路径同样入账）；updates.cjs 安装失败上报后如实重抛"
+    checks:
+      - "红跑未修源码 → 1（10具名反例：R1×3/R2×4/R3×3；red-unfixed.log；midwait首红为探针笔误已修正并存证 red-unfixed-midwait-fixprobe.log）"
+      - "修后单元 → 0（30/30，green-units.log）；npm test → 0（529/529，npm-test.log）；build/prepare → 0/0（载荷含修复）"
+      - "node scripts/test-files-desktop.mjs → 0（desktop-files-r1.log）；node scripts/test-dsk-storage-desktop.mjs → 0（desktop-storage-r1.log，RP1不回归）"
+      - "node scripts/test-dsk-rp2-exit-desktop.mjs → r1 1（Phase D断言机制失败原样保留 exit-desktop-r1.log）→ r1b 0（exit-desktop-r1b.log：C1受阻取消窗口保持锁定+dsk如实拒绝storage-unavailable、C2 BLOCKED下close受控重试无二次确认、C3释放后真实排空干净退出、D无插桩自然退出exitCode 0+signal null无强杀）"
+      - "update关库顺序证据升级为真实sqlite（quitAndInstall时刻 dbOpen=false、drainState=ready 实测）；等待期清理用例改排空真实时序并注明'同步停服后无全新清理注册点'边界；旧反向断言仅作红反例不表述为通过"
+  rework_round2:
+    issues: "F1 清理重试被排空内联await使整体真实截止失效（挂起重试拖穿预算且第二次dispose复用永不完成promise）；F2 prepareExit抛/finalizeClose抛/updater同步throw与异步error静默落BLOCKED零原生提示"
+    fixes: "service.cjs 非阻塞inflight清理重试（单资源跨dispose单并发、100ms启动节奏、循环不await重试、截止后不发起新尝试、台账/失败/进行中保留、全净才关库）；main.cjs 异常统一landBlockedWithNotice原生提示（noticeInFlight+retrying双守卫单提示单owner、提示崩溃按取消处理不未捕获不放行不循环、迟到旧updater error状态/kind门拒绝）；updates.cjs 零改动"
+    checks:
+      - "红① red-unfixed.log → 1（4具名红后测试自身应答无界致OOM，如实记录为harness失败非全部具名红）"
+      - "红② red-unfixed-attempt2.log → 1（35用例8红：F1×2预算内未返回/F2×4零提示/迟到error撤权/竞争双owner，失败原因逐条核验非DI漏接。订正2026-09-18：其中迟到error撤权与竞争双owner两例经日志核实仅失败于'提示未出现'前置断言（promptsAfterLanding>=1 与 counts.blocked 0!==1），属F2零提示缺陷证据，不能表述为已证明撤权/双owner行为）"
+      - "红③ red-unfixed-attempt3-f1.log → 1（F1新测试在回填r1内联原文快照上双红且finally释放干净；快照为回填构造非原样存档，47行diff见pre-f1-fix-provenance.txt/pre-f1-fix.diff。订正2026-09-18：快照sha256实为acda4adfede8cdeb0c4caf17450bd76589ad50539faa6d380bf7318ae8af3aad（复算核实），此前记录89a3294b…有误）"
+      - "修后单元 green-units.log → 0（35/35）；npm test → 0（534/534，npm-test.log）；build/prepare → 0/0"
+      - "desktop-files-r2.log → 0；desktop-storage-r2.log → 0（RP1不回归）；exit-desktop-r2.log → 0（A1/A2/B + C1-C3受阻提示/全程锁定/受控重试，C含终点插桩与CDP仅证接线；D无插桩自然退出exitCode 0+signal null无强杀，C/D证据严格区分）"
+      - "异常提示四类场景为单元级证据+真实main接线，未在桌面逐一复现，不以桌面亲测表述"
+  blockers: []
+review:
+  agent: director-reviewer
+  verdict: REPLAN
+  reference: "agent_ee46ca0e-3b17-4217-bedf-5a8bba1539e7：排空与既有确认/更新正常链路认可，F3提示pending可被second-instance绕过、F4连续失败第二次retry丢失仍阻断；两轮后转planner。"
+  continuation: "DSK-004-RP2-ownership-01已获批并IMPLEMENTED，自测537项通过但独立审查调用被取消未出结论；负责人要求冻结提交。原rework_rounds=2保留，不登记RP2 PASS。"
+  findings:
+    - "F3/F4业务修订当前仅coder声明及自测，待关联独立审查。"
+    - "E1历史快照hash及红例归因更正已记录，不追改旧日志。"
+  unverified: []
+  rework_rounds: 2

@@ -40,6 +40,76 @@ const servicePromise = buildBundle('desktop/storage/service.cjs');
 const libraryPromise = buildBundle('desktop/storage/library.cjs');
 const objectsPromise = buildBundle('desktop/storage/objects.cjs');
 
+// RP1 V01: real-fsp barriers for the R01/R02 races. The bundle intercepts node:fs/promises and
+// wraps ONLY rm/mkdir: the wrapped calls still execute the REAL fs operation, but the first call
+// matching the test's predicate is held behind a gate. This works identically against older
+// service sources (no constructor DI required), so red runs exercise the actual race window.
+const RP1_FSP_WRAPPER = `
+const real = require('fs/promises');
+// Idempotent: several bundles (service + objects/library) each embed this wrapper and must
+// share ONE gate state, otherwise the later bundle's assignment would clobber the gates.
+const state = globalThis.__rp1FspGates || {
+    rmMatch: null, rmMatched: false, rmCalls: 0, rmGate: null,
+    mkdirMatch: null, mkdirMatched: false, mkdirCalls: 0, mkdirGate: null,
+    rmRejectMatch: null, rmRejectCalls: 0, rmRejectPath: null, rmRejectCode: null, rmRejectError: null,
+};
+globalThis.__rp1FspGates = state;
+// Normalize fields introduced by this wrapper revision when the shared state was created
+// earlier in this process without them (never reset fields: cross-bundle gates must survive).
+if (typeof state.rmRejectCalls !== 'number') state.rmRejectCalls = 0;
+function gated(kind, args, call) {
+    const match = kind === 'rm' ? state.rmMatch : state.mkdirMatch;
+    const done = kind === 'rm' ? 'rmMatched' : 'mkdirMatched';
+    const gate = kind === 'rm' ? state.rmGate : state.mkdirGate;
+    if (typeof match === 'function' && !state[done] && match(...args)) {
+        state[done] = true;
+        if (gate) return gate.then(call);
+    }
+    return call();
+}
+module.exports = {
+    rm(...args) {
+        state.rmCalls += 1;
+        if (typeof state.rmRejectMatch === 'function' && state.rmRejectMatch(...args)) {
+            // Validation-01: deterministic denial for exactly the test-picked path. The
+            // rejection is INJECTED here and clearly marked SIMULATED (not a real OS
+            // permission failure); every other call passes through to the real fs. The exact
+            // error object is recorded so the test can assert code/path/count after the fact.
+            state.rmRejectCalls += 1;
+            state.rmRejectPath = args[0];
+            const error = new Error('[rp1-fsp-gate] SIMULATED fsp.rm denial injected by the test (not a real OS permission failure): ' + args[0]);
+            error.code = state.rmRejectCode === 'EACCES' ? 'EACCES' : 'EPERM';
+            error.simulated = true;
+            state.rmRejectError = error;
+            return Promise.reject(error);
+        }
+        return gated('rm', args, () => real.rm(...args));
+    },
+    mkdir(...args) { state.mkdirCalls += 1; return gated('mkdir', args, () => real.mkdir(...args)); },
+};
+Object.setPrototypeOf(module.exports, real);
+`;
+
+function fspGatePlugin() {
+    return {
+        name: 'rp1-fsp-gate',
+        setup(build) {
+            build.onResolve({ filter: /^node:fs\/promises$/ }, () => ({ path: 'rp1-gated-fsp', namespace: 'rp1-fsp-gate' }));
+            build.onLoad({ filter: /.*/, namespace: 'rp1-fsp-gate' }, () => ({ contents: RP1_FSP_WRAPPER, loader: 'js', resolveDir: repo }));
+        },
+    };
+}
+
+async function buildGatedService(entry) {
+    const outfile = path.join(repo, 'tmp', `dsk-storage-gated-${process.pid}-${bundleSeq++}.cjs`);
+    await esbuild.build({
+        entryPoints: [entry], outfile, bundle: true, platform: 'node', format: 'cjs',
+        charset: 'utf8', external: ['electron'], logLevel: 'silent', plugins: [fspGatePlugin()],
+    });
+    process.on('exit', () => { try { fs.rmSync(outfile, { force: true }); } catch { /* best effort */ } });
+    return require(outfile);
+}
+
 let rootSeq = 0;
 function freshRoot(label) {
     const root = path.join(repo, 'tmp', `dsk-storage-test-${process.pid}-${label}-${rootSeq++}`);
@@ -1584,4 +1654,435 @@ test('REWORK2 F07 red: a receipt read failure after a proven commit is reported 
     assert.equal(lib.getProject(created.data.projectId).revision, 1, 'the commit must have landed exactly once');
     await svc.dispose();
     lib.close();
+});
+
+// =====================================================================================
+// DSK-004-RP1 named counterexamples: request frame-generation invalidation and the
+// cancel/commit arbitration boundary (reviewer finding R2-01 and the RP1 acceptance).
+// Each CE case reproduces a concrete race against the real library/object/service layers
+// and was first run RED against the unfixed service (evidence: tmp/dsk-004-rp1-coder-*/),
+// then must be GREEN after the frame-generation fix. Control cases pin the boundary the
+// fix must NOT move (published results survive; honest either-branch commit arbitration).
+// =====================================================================================
+
+const RP1_DELAY = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+/** RP1 CE1: the native dialog returns AFTER a reload while the sender is still alive —
+ * the deferred backup must NOT publish. The frame fixture deliberately has no
+ * isDestroyed method, so only a captured generation (not sender destruction) can catch it. */
+test('RP1 CE1 red: a backup whose dialog returns after a reload still publishes while the sender is alive', async () => {
+    const targetRoot = freshRoot('rp1-ce1-target');
+    fs.mkdirSync(targetRoot, { recursive: true });
+    let reloadOnDialog = false;
+    const dialog = {
+        showOpenDialog: async () => {
+            if (reloadOnDialog) svc.closeFrameSessions(); // the real reload path: did-start-loading
+            return { canceled: false, filePaths: [targetRoot] };
+        },
+    };
+    const { svc, call } = await makeService({ label: 'rp1-ce1', dialog });
+    const seeded = await seedProjectWithSnapshots(call, 1);
+    // First backup completes normally BEFORE any reload and must survive everything later.
+    const published = await call('storage.v1.backup.create', { projectId: seeded.projectId });
+    assert.equal(published.ok, true, JSON.stringify(published.error ?? {}));
+    const publishedDir = path.join(targetRoot, fs.readdirSync(targetRoot).find(name => name.startsWith('director-desk-backup-')));
+    // Now the dialog returns after the reload fired; the requester frame is NOT destroyed.
+    reloadOnDialog = true;
+    const late = await call('storage.v1.backup.create', { projectId: seeded.projectId });
+    assert.equal(late.ok, false, `a reload-invalidated backup must not publish, got ${JSON.stringify(late)}`);
+    assert.equal(late.error.message, 'storage.v1/storage-unavailable');
+    const dirs = fs.readdirSync(targetRoot).filter(name => name.startsWith('director-desk-backup-') || name.startsWith('.staging-'));
+    assert.equal(dirs.length, 1, `only the pre-reload backup may exist, found ${JSON.stringify(dirs)}`);
+    assert.deepEqual(fs.readdirSync(publishedDir).sort(), ['library.sqlite', 'manifest.json', 'objects'], 'the earlier published backup stays intact');
+    await svc.dispose();
+});
+
+/** RP1 CE2: the native restore dialog returns after a reload — the restore must NOT register. */
+test('RP1 CE2 red: a restore whose dialog returns after a reload still registers the project', async () => {
+    const targetRoot = freshRoot('rp1-ce2-target');
+    fs.mkdirSync(targetRoot, { recursive: true });
+    let dialogTarget = targetRoot;
+    let reloadOnDialog = false;
+    const dialog = {
+        showOpenDialog: async () => {
+            if (reloadOnDialog) svc.closeFrameSessions();
+            return { canceled: false, filePaths: [dialogTarget] };
+        },
+    };
+    const { svc, call } = await makeService({ label: 'rp1-ce2', dialog });
+    const seeded = await seedProjectWithSnapshots(call, 1);
+    const backup = await call('storage.v1.backup.create', { projectId: seeded.projectId });
+    assert.equal(backup.ok, true, JSON.stringify(backup.error ?? {}));
+    dialogTarget = path.join(targetRoot, fs.readdirSync(targetRoot).find(name => name.startsWith('director-desk-backup-')));
+    reloadOnDialog = true;
+    const restore = await call('storage.v1.backup.restore', {});
+    assert.equal(restore.ok, false, `a reload-invalidated restore must not register, got ${JSON.stringify(restore)}`);
+    assert.equal(restore.error.message, 'storage.v1/storage-unavailable');
+    const list = await call('storage.v1.project.list', {});
+    assert.equal(list.ok, true, `project.list must keep working in the new generation: ${JSON.stringify(list.error ?? {})}`);
+    assert.equal(list.data.projects.length, 1, 'the invalidated restore must not add a project');
+    const original = await call('project.status', { projectId: seeded.projectId });
+    assert.equal(original.ok && original.data.revision, 1, 'the original project is untouched');
+    await svc.dispose();
+});
+
+/** RP1 CE3: the reload lands MID-COPY during restore (after validation, during the object
+ * copy loop) — the copy must stop, its staged objects must be cleaned, and nothing registers. */
+test('RP1 CE3 red: a reload landing mid-copy still lets the restore finish and register', async () => {
+    const { createObjectStore } = await objectsPromise;
+    const root = freshRoot('rp1-ce3');
+    const realStore = createObjectStore({ root });
+    let reloadHook = null;
+    const store = {
+        ...realStore,
+        async streamFileToObject(...args) {
+            if (reloadHook) { const hook = reloadHook; reloadHook = null; hook(); }
+            return realStore.streamFileToObject(...args);
+        },
+    };
+    const targetRoot = freshRoot('rp1-ce3-target');
+    fs.mkdirSync(targetRoot, { recursive: true });
+    let dialogTarget = targetRoot;
+    const dialog = { showOpenDialog: async () => ({ canceled: false, filePaths: [dialogTarget] }) };
+    const { createStorageService } = await servicePromise;
+    const contracts = await contractsPromise;
+    const svc = createStorageService({
+        root, objects: store, dialog,
+        verifiers: { document: contracts.assertSceneDocument, canonical: contracts.canonicalJson, manifest: contracts.BackupManifestSchema },
+    });
+    const frame = { sender: { id: 1 }, senderFrame: { url: 'director://app/' } };
+    const call = (action, data) => svc.runInRequestContext(frame, () => svc.handlers[action](data));
+    const seeded = await seedProjectWithSnapshots(call, 1);
+    const backup = await call('storage.v1.backup.create', { projectId: seeded.projectId });
+    assert.equal(backup.ok, true, JSON.stringify(backup.error ?? {}));
+    dialogTarget = path.join(targetRoot, fs.readdirSync(targetRoot).find(name => name.startsWith('director-desk-backup-')));
+    reloadHook = () => svc.closeFrameSessions(); // fires inside the first copy iteration
+    const restore = await call('storage.v1.backup.restore', {});
+    assert.equal(restore.ok, false, `a mid-copy invalidated restore must not register, got ${JSON.stringify(restore)}`);
+    const list = await call('storage.v1.project.list', {});
+    assert.equal(list.data.projects.length, 1, 'no project may be registered by the invalidated restore');
+    const projectsDir = path.join(root, 'projects');
+    assert.deepEqual(fs.existsSync(projectsDir) ? fs.readdirSync(projectsDir).sort() : [],
+        [seeded.projectId], 'staged restore objects must be cleaned, leaving only the original project');
+    await svc.dispose();
+});
+
+/** RP1 CE5: an OLD-generation backup is still pending (dialog open) while a reload happens and
+ * a NEW-generation request runs in parallel — the late backup must fail and must not disturb
+ * the new generation; the new generation must succeed normally (RP1-A4). */
+test('RP1 CE5 red: a reload-invalidated pending backup fails late without harming the parallel new generation', async () => {
+    const targetRoot = freshRoot('rp1-ce5-target');
+    fs.mkdirSync(targetRoot, { recursive: true });
+    let releaseDialog = () => { };
+    const dialog = { showOpenDialog: () => new Promise(resolve => { releaseDialog = () => resolve({ canceled: false, filePaths: [targetRoot] }); }) };
+    const { svc, call } = await makeService({ label: 'rp1-ce5', dialog });
+    const seeded = await seedProjectWithSnapshots(call, 1);
+    const backupPromise = call('storage.v1.backup.create', { projectId: seeded.projectId });
+    await RP1_DELAY(80); // the native dialog is now pending (old generation in flight)
+    svc.closeFrameSessions(); // reload while the dialog is open
+    // New generation runs a full request cycle while the old backup is still parked on the dialog.
+    const createdB = await call('project.create', { name: '新代工程' });
+    assert.equal(createdB.ok, true, `a new-generation create must succeed: ${JSON.stringify(createdB.error ?? {})}`);
+    const commitB = await uploadDocument({ call, sessionId: createdB.data.sessionId }, await sampleDoc('新代快照'), {});
+    assert.equal(commitB.ok, true, `a new-generation save must succeed: ${JSON.stringify(commitB.error ?? {})}`);
+    assert.equal(commitB.data.revision, 1);
+    releaseDialog(); // the OLD-generation dialog finally returns its chosen directory
+    const backup = await backupPromise;
+    assert.equal(backup.ok, false, `the old-generation backup must fail after the reload, got ${JSON.stringify(backup)}`);
+    assert.equal(backup.error.message, 'storage.v1/storage-unavailable');
+    assert.deepEqual(fs.readdirSync(targetRoot), [], 'the invalidated backup must not publish anything');
+    const statusB = await call('project.status', { projectId: createdB.data.projectId });
+    assert.equal(statusB.ok && statusB.data.revision, 1, 'the late old-generation failure must not disturb the new generation');
+    const statusA = await call('project.status', { projectId: seeded.projectId });
+    assert.equal(statusA.ok && statusA.data.revision, 1, 'the original project stays intact');
+    await svc.dispose();
+});
+
+/** RP1 control: a backup that PUBLISHED before the reload must survive every later
+ * invalidation/dispose — late cleanup may never delete a published successful result. */
+test('RP1 control: a published backup survives a later reload and dispose (cleanup never deletes published results)', async () => {
+    const targetRoot = freshRoot('rp1-preserved-target');
+    fs.mkdirSync(targetRoot, { recursive: true });
+    const dialog = { showOpenDialog: async () => ({ canceled: false, filePaths: [targetRoot] }) };
+    const { svc, call } = await makeService({ label: 'rp1-preserved', dialog });
+    const seeded = await seedProjectWithSnapshots(call, 1);
+    const backup = await call('storage.v1.backup.create', { projectId: seeded.projectId });
+    assert.equal(backup.ok, true, JSON.stringify(backup.error ?? {}));
+    svc.closeFrameSessions(); // reload AFTER the publish completed
+    const dirs = fs.readdirSync(targetRoot).filter(name => name.startsWith('director-desk-backup-'));
+    assert.equal(dirs.length, 1, 'the published backup must survive the reload');
+    assert.deepEqual(fs.readdirSync(path.join(targetRoot, dirs[0])).sort(), ['library.sqlite', 'manifest.json', 'objects']);
+    await svc.dispose();
+    assert.equal(fs.readdirSync(targetRoot).filter(name => name.startsWith('director-desk-backup-')).length, 1,
+        'the published backup must survive dispose');
+});
+
+/** RP1 control (commit arbitration, RP1-A3): a commit raced by a reload either registers and
+ * reports success, or fails without registering — never both, never a registration after the
+ * frame generation moved past the final arbitration point, and no tmp file may survive. */
+test('RP1 control: a commit raced by a reload lands at most once and never after invalidation', async () => {
+    const { svc, call, root } = await makeService({ label: 'rp1-commitrace' });
+    const created = await call('project.create', { name: '重载提交竞态' });
+    const service = { call, sessionId: created.data.sessionId };
+    const document = await sampleDoc('重载提交竞态');
+    const bytes = Buffer.from(JSON.stringify(document), 'utf8');
+    const begin = await call('storage.v1.upload.begin', { sessionId: service.sessionId, expectedRevision: 0, declaredLength: bytes.length });
+    assert.equal(begin.ok, true);
+    const { transferId, chunkSize } = begin.data;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        const slice = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+        const chunk = await call('storage.v1.upload.chunk', { transferId, offset, data: slice.toString('base64') });
+        assert.equal(chunk.ok, true);
+    }
+    const commitPromise = call('storage.v1.upload.commit', { transferId });
+    await RP1_DELAY(0); // land the reload while the commit is mid-flight
+    svc.closeFrameSessions();
+    const commit = await commitPromise;
+    const status = await call('project.status', { projectId: created.data.projectId });
+    assert.equal(status.ok, true);
+    if (commit.ok) {
+        assert.equal(status.data.revision, 1, 'a reported success must be a real registration');
+    } else {
+        assert.equal(status.data.revision, 0, 'a failed commit must not have registered anything');
+    }
+    // The stale transfer id is dead in every case; late operations are refused.
+    const lateChunk = await call('storage.v1.upload.chunk', { transferId, offset: 0, data: SAMPLE_B64 });
+    assert.equal(lateChunk.ok, false, 'the stale transfer id must not continue after the reload');
+    await RP1_DELAY(50);
+    const uploadsDir = path.join(root, 'uploads');
+    const leftovers = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir).filter(name => name.endsWith('.part')) : [];
+    assert.deepEqual(leftovers, [], 'no .part file may survive the raced commit');
+    await svc.dispose();
+});
+
+// =====================================================================================
+// DSK-004-RP1 rework round 2 (review agent_02369570): R01 receipt-pinning / late rename
+// and R02 the unchecked window between the staging mkdir and the first backup copy.
+// History note: the original DI injections (removeTmp / ensureDir) were replaced in rework
+// round 3 (V01) by the esbuild-level REAL fsp barriers above — the wrapped fsp.rm/fsp.mkdir
+// still perform the real operation, only the first predicate match is held behind a gate,
+// and reaching the barrier is asserted. The validation-01 revision additionally injects one
+// clearly-marked SIMULATED fsp.rm denial for the cleanup-failure control below (the retired
+// r+ file-handle lock never actually failed rm on this machine).
+// =====================================================================================
+
+/** RP1 R01: the commit registered, then the post-commit tmp cleanup awaits — a reload hands
+ * the project to a new generation which saves revision 2 (name NEW) while the OLD request is
+ * still finalizing. The old request must NOT read the future latest revision into its receipt,
+ * must NOT rename the project afterwards, and must still report ITS OWN commit truthfully.
+ * Barrier: the REAL fsp.rm of the tested commit's .part is held behind a gate (wrapped at
+ * esbuild level, works against old and new sources alike); reaching it is asserted. */
+test('RP1 R01 red: a commit finalizing across a reload pins its receipt to the future revision and renames after the new generation saved', async () => {
+    const contracts = await contractsPromise;
+    const { createStorageService } = await buildGatedService('desktop/storage/service.cjs');
+    const gates = globalThis.__rp1FspGates;
+    gates.rmGate = new Promise(resolve => { gates.releaseRm = resolve; });
+    gates.rmMatch = target => typeof target === 'string' && target.endsWith('.part');
+    const svc = createStorageService({
+        root: freshRoot('rp1-r01'),
+        verifiers: { document: contracts.assertSceneDocument, canonical: contracts.canonicalJson, manifest: contracts.BackupManifestSchema },
+        dialog: null,
+    });
+    const frame = { sender: { id: 1 }, senderFrame: { url: 'director://app/' } };
+    const call = (action, data) => svc.runInRequestContext(frame, () => svc.handlers[action](data));
+    const created = await call('project.create', { name: 'R01项目' });
+    assert.equal(created.ok, true);
+    // The tested commit is the project's FIRST save (revision 1) and carries a name — its late
+    // rename is what would clobber the new generation's NEW.
+    const bytes = Buffer.from(JSON.stringify(await sampleDoc('R01版本1')), 'utf8');
+    const begin = await call('storage.v1.upload.begin', { sessionId: created.data.sessionId, expectedRevision: 0, declaredLength: bytes.length, name: 'OLD' });
+    assert.equal(begin.ok, true);
+    const { transferId, chunkSize } = begin.data;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        const slice = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+        const chunk = await call('storage.v1.upload.chunk', { transferId, offset, data: slice.toString('base64') });
+        assert.equal(chunk.ok, true);
+    }
+    const commitPromise = call('storage.v1.upload.commit', { transferId });
+    // Deterministic barrier via the REAL fsp.rm: wait until the tested commit's tmp removal is
+    // actually entered (registration has landed, receipt not yet finalized), then assert it.
+    for (let waited = 0; waited < 2000 && !gates.rmMatched; waited += 5) await RP1_DELAY(5);
+    assert.ok(gates.rmMatched, 'the post-commit real fsp.rm barrier must be reached');
+    assert.equal(gates.rmCalls, 1, 'exactly the tested cleanup must have reached the barrier');
+    // Reload while the old request is parked inside the real removal; the new generation saves
+    // revision 2 with name NEW (its own cleanup is a later rm call and passes through).
+    svc.closeFrameSessions();
+    const reopened = await call('project.open', { projectId: created.data.projectId });
+    assert.equal(reopened.ok, true, `the new generation must open the project: ${JSON.stringify(reopened.error ?? {})}`);
+    assert.equal(reopened.data.revision, 1, 'the tested commit is provably registered before the new generation saves');
+    const newSave = await uploadDocument({ call, sessionId: reopened.data.sessionId }, await sampleDoc('R01版本2'), { expectedRevision: 1, name: 'NEW' });
+    assert.equal(newSave.ok, true, `the new generation must save revision 2: ${JSON.stringify(newSave.error ?? {})}`);
+    assert.equal(newSave.data.revision, 2);
+    const newSnapshotId = newSave.data.snapshot.snapshotId;
+    gates.releaseRm(); // the old request resumes and finalizes
+    const commit = await commitPromise;
+    // The committed old request reports ITS OWN commit truthfully — never an unregistered failure.
+    assert.equal(commit.ok, true, `a proven commit must answer success: ${JSON.stringify(commit.error ?? {})}`);
+    assert.equal(commit.data.revision, 1, `the receipt revision must be this request's own commit (1), got ${JSON.stringify(commit.data)}`);
+    assert.equal(commit.data.snapshot.revision, 1, 'the receipt must not pair its old snapshotId with the future revision');
+    // The stored rows tell the truth: the old snapshot row IS revision 1, revision 2 belongs to
+    // the new generation, and the project name must stay NEW (no late rename to OLD).
+    const db = svc._internal.db;
+    assert.equal(db.getSnapshot(created.data.projectId, commit.data.snapshot.snapshotId).revision, 1, 'oldSnapshotRow stays revision 1');
+    assert.equal(db.getSnapshot(created.data.projectId, newSnapshotId).revision, 2, 'the new generation snapshot row is revision 2');
+    const finalProject = db.getProject(created.data.projectId);
+    assert.equal(finalProject.revision, 2);
+    assert.equal(finalProject.name, 'NEW', `the late old-generation rename must not clobber NEW, got ${finalProject.name}`);
+    assert.equal(finalProject.current.snapshotId, newSnapshotId);
+    await svc.dispose();
+});
+
+/** RP1 R01 control: the PROJECT rename (db.renameProject inside the commit receipt section —
+ * NOT the backup publish fsp.rename, which is covered by the published-backup-survival control)
+ * already finalized reports committed success across a LATER reload (reviewer-preserved). */
+test('RP1 R01 control: a finalized project rename reports success across a later reload', async () => {
+    const { svc, call } = await makeService({ label: 'rp1-r01-control' });
+    const created = await call('project.create', { name: '控制改名' });
+    const commit = await uploadDocument({ call, sessionId: created.data.sessionId }, await sampleDoc('控制快照'), { name: '新名' });
+    assert.equal(commit.ok, true, JSON.stringify(commit.error ?? {}));
+    svc.closeFrameSessions(); // reload AFTER the whole commit section finished
+    const status = await call('project.status', { projectId: created.data.projectId });
+    assert.equal(status.ok && status.data.revision, 1);
+    assert.equal(status.data.name, '新名', 'the finalized project rename survives the later reload');
+    await svc.dispose();
+});
+
+/** RP1 R01 control (validation-01 revision): the retired r+ file-handle version never proved
+ * that the rm actually failed — on this machine a held r+ handle does NOT make fsp.rm fail
+ * (probe log: probe-filelock-rplus.log inside tmp/dsk-004-rp1-validation-01-20260917T075926Z,
+ * rm SUCCEEDED despite the held handle) and the old test only asserted commit.ok, so its
+ * "real EPERM" claim was a false positive. The cleanup denial is now INJECTED deterministically
+ * at the esbuild fsp wrapper: exactly THIS transfer's .part path gets one simulated
+ * EPERM/EACCES rejection (clearly marked, not a real OS permission failure); every other path
+ * passes through to the real fs. Asserted: the denial hit exactly once, on the exact path,
+ * with the injected code, AFTER the real registration (revision 1 was already the project's
+ * current row at the rm moment), and the commit still reports ITS OWN committed success with
+ * receipt fields matching the real database rows. */
+test('RP1 R01 control: an injected fsp.rm denial after a registered commit still reports committed success', async () => {
+    const contracts = await contractsPromise;
+    const { createStorageService } = await buildGatedService('desktop/storage/service.cjs');
+    const gates = globalThis.__rp1FspGates;
+    const root = freshRoot('rp1-rmfail');
+    const svc = createStorageService({
+        root,
+        verifiers: { document: contracts.assertSceneDocument, canonical: contracts.canonicalJson, manifest: contracts.BackupManifestSchema },
+        dialog: null,
+    });
+    const frame = { sender: { id: 1 }, senderFrame: { url: 'director://app/' } };
+    const call = (action, data) => svc.runInRequestContext(frame, () => svc.handlers[action](data));
+    const created = await call('project.create', { name: '清理失败' });
+    assert.equal(created.ok, true);
+    const document = await sampleDoc('清理失败快照');
+    const bytes = Buffer.from(JSON.stringify(document), 'utf8');
+    const begin = await call('storage.v1.upload.begin', { sessionId: created.data.sessionId, expectedRevision: 0, declaredLength: bytes.length });
+    assert.equal(begin.ok, true);
+    const { transferId, chunkSize } = begin.data;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        const slice = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+        const chunk = await call('storage.v1.upload.chunk', { transferId, offset, data: slice.toString('base64') });
+        assert.equal(chunk.ok, true);
+    }
+    // The denial targets exactly THIS transfer's .part path — nothing else.
+    const uploadsDir = path.join(root, 'uploads');
+    const partName = fs.readdirSync(uploadsDir).find(name => name.endsWith('.part'));
+    assert.ok(partName, 'the upload tmp file must exist before the commit');
+    const partPath = path.join(uploadsDir, partName);
+    let dbAtInjection; // captured by the predicate at the exact rm moment
+    gates.rmRejectCode = 'EPERM';
+    gates.rmRejectMatch = target => {
+        if (target !== partPath) return false;
+        if (dbAtInjection === undefined) {
+            const project = svc._internal.db.getProject(created.data.projectId);
+            dbAtInjection = {
+                revision: project ? project.revision : null,
+                currentSnapshotId: project && project.current ? project.current.snapshotId : null,
+            };
+        }
+        return true;
+    };
+    let commit, injection;
+    try {
+        commit = await call('storage.v1.upload.commit', { transferId });
+    } finally {
+        // Restore the injection state even when an await above throws — never leak into other
+        // tests; the observed values are snapshotted first so assertions run after the reset.
+        injection = {
+            calls: gates.rmRejectCalls,
+            path: gates.rmRejectPath,
+            code: gates.rmRejectError ? gates.rmRejectError.code : null,
+            message: gates.rmRejectError ? gates.rmRejectError.message : null,
+            simulated: gates.rmRejectError ? gates.rmRejectError.simulated === true : false,
+            dbAtInjection,
+        };
+        gates.rmRejectMatch = null;
+        gates.rmRejectCode = null;
+        gates.rmRejectPath = null;
+        gates.rmRejectError = null;
+        gates.rmRejectCalls = 0;
+    }
+    assert.equal(commit.ok, true, `a registered commit must stay a success when its cleanup rm is denied: ${JSON.stringify(commit.error ?? {})}`);
+    assert.equal(injection.calls, 1, `the denial must hit exactly once (no retry), got ${injection.calls}`);
+    assert.equal(injection.path, partPath, 'the denial must target exactly this transfer\'s .part path');
+    assert.ok(injection.code === 'EACCES' || injection.code === 'EPERM', `the injected rejection must carry EACCES or EPERM, got ${JSON.stringify(injection.code)}`);
+    assert.equal(injection.simulated, true, 'the injected fault must be marked as simulated');
+    assert.ok(String(injection.message).includes('SIMULATED'), 'the injected error message must say SIMULATED');
+    // Ordering: at the rm moment the real registration had already landed — revision 1 was the
+    // project's current row, so the denial happened strictly AFTER the real COMMIT.
+    assert.equal(injection.dbAtInjection.revision, 1, `the real db.commitSnapshot must land before the cleanup denial, saw ${JSON.stringify(injection.dbAtInjection)}`);
+    assert.equal(commit.data.revision, 1);
+    assert.equal(commit.data.snapshot.revision, 1, 'the receipt snapshot revision stays 1');
+    const db = svc._internal.db;
+    assert.equal(injection.dbAtInjection.currentSnapshotId, commit.data.snapshot.snapshotId, 'the denied cleanup ran after the tested snapshot became current');
+    assert.equal(db.getSnapshot(created.data.projectId, commit.data.snapshot.snapshotId).revision, 1, 'the receipt snapshotId is a real revision-1 row');
+    const finalProject = db.getProject(created.data.projectId);
+    assert.equal(finalProject.revision, 1);
+    assert.equal(finalProject.current.snapshotId, commit.data.snapshot.snapshotId);
+    await svc.dispose();
+});
+
+/** RP1 R02: the reload lands while the backup's staging directory is being created (after the
+ * dialog gate). The backup must re-check BEFORE creating the backup database or copying the
+ * FIRST object: zero copies, zero published directories, staging cleaned, existing data intact.
+ * Barrier: the REAL fsp.mkdir of the staging directory is held behind a gate (wrapped at esbuild
+ * level); reaching it is asserted, and against the unfixed source the reload lands before the
+ * pre-copy check exists, so exactly ONE object is copied before the late refusal. */
+test('RP1 R02 red: a reload during the staging mkdir still creates the backup database and copies an object before refusing', async () => {
+    const { createObjectStore } = await objectsPromise;
+    const root = freshRoot('rp1-r02');
+    const realStore = createObjectStore({ root });
+    let copies = 0;
+    const store = {
+        ...realStore,
+        async streamObjectToFile(...args) { copies += 1; return realStore.streamObjectToFile(...args); },
+    };
+    const targetRoot = freshRoot('rp1-r02-target');
+    fs.mkdirSync(targetRoot, { recursive: true });
+    const { createStorageService } = await buildGatedService('desktop/storage/service.cjs');
+    const gates = globalThis.__rp1FspGates;
+    gates.mkdirGate = new Promise(resolve => { gates.releaseMkdir = resolve; });
+    gates.mkdirMatch = target => typeof target === 'string' && target.includes(`${path.sep}.staging-`);
+    const dialog = { showOpenDialog: async () => ({ canceled: false, filePaths: [targetRoot] }) };
+    const contracts = await contractsPromise;
+    const svc = createStorageService({
+        root, objects: store, dialog,
+        verifiers: { document: contracts.assertSceneDocument, canonical: contracts.canonicalJson, manifest: contracts.BackupManifestSchema },
+    });
+    const frame = { sender: { id: 1 }, senderFrame: { url: 'director://app/' } };
+    const call = (action, data) => svc.runInRequestContext(frame, () => svc.handlers[action](data));
+    const seeded = await seedProjectWithSnapshots(call, 1);
+    const backupPromise = call('storage.v1.backup.create', { projectId: seeded.projectId });
+    // Deterministic barrier via the REAL fsp.mkdir: wait until the staging creation is entered.
+    for (let waited = 0; waited < 2000 && !gates.mkdirMatched; waited += 5) await RP1_DELAY(5);
+    assert.ok(gates.mkdirMatched, 'the staging real fsp.mkdir barrier must be reached');
+    svc.closeFrameSessions(); // reload while the staging creation is parked
+    gates.releaseMkdir();
+    const backup = await backupPromise;
+    assert.equal(backup.ok, false, `a backup invalidated during staging must fail, got ${JSON.stringify(backup)}`);
+    assert.equal(copies, 0, `a reload before the copy start must leave ZERO copied objects, got ${copies}`);
+    assert.deepEqual(fs.readdirSync(targetRoot), [], 'no staging remnant and no published backup may exist');
+    const list = await call('storage.v1.project.list', {});
+    assert.equal(list.data.projects.length, 1, 'existing data is untouched');
+    const status = await call('project.status', { projectId: seeded.projectId });
+    assert.equal(status.ok && status.data.revision, 1);
+    await svc.dispose();
 });

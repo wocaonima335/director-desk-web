@@ -17,7 +17,42 @@ function attachFiles(window) {
         const result = await dialog.showSaveDialog(window, { title: '保存项目', defaultPath, filters: [{ name: '导演台工程', extensions: ['director'] }], properties: ['createDirectory', 'showOverwriteConfirmation'] });
         return result.canceled ? null : result.filePath;
     } });
-    let closeRequest = '', allowClose = false;
+    // RP2: one shared, awaitable exit confirmation replaces the old closeRequest/allowClose pair.
+    // Every quit entry (window close, app.quit, update install via the unified coordinator in
+    // main.cjs) awaits the same promise. A receipt resolves only ITS OWN request id, so a late
+    // or stale receipt can never complete or trigger a newer exit, and the receipt NEVER closes
+    // the window itself — the final close belongs to the unified exit coordinator.
+    let exitConfirm = null; // { id, promise, resolve }
+    const confirmDialogOptions = { type: 'question', title: '退出导演台',
+        message: '是否保存当前工程后退出？', detail: '保存取消或失败时会留在编辑器。正在编辑或导出的任务需先完成或取消。',
+        buttons: ['保存并退出', '不保存退出', '取消'], defaultId: 0, cancelId: 2, noLink: true };
+    const closeResult = (event, result) => {
+        if (!trusted(event) || !exitConfirm || result?.id !== exitConfirm.id) return;
+        const resolve = exitConfirm.resolve;
+        exitConfirm = null;
+        resolve(result.saved === true ? 'saved' : 'cancelled');
+    };
+    /** Register the shared save request (no dialog). Used by confirmExit after the dialog and by
+     * the navigation-protection save path. */
+    function sendSaveRequest() {
+        let resolve;
+        const promise = new Promise(done => { resolve = done; });
+        exitConfirm = { id: randomUUID(), promise, resolve };
+        window.webContents.send('director-save-before-close', { id: exitConfirm.id });
+        return promise;
+    }
+    // RP2: main-process-internal awaitable confirmation. The native three-choice dialog is shown
+    // even when idle: the main process cannot know dirty state without a renderer handshake,
+    // which stays out of scope this round. Repeat calls while a request is in flight join the
+    // same promise. Cancel, save-cancel and save-failure resolve 'cancelled' — the window and the
+    // storage service stay fully usable.
+    function confirmExit() {
+        if (exitConfirm) return exitConfirm.promise;
+        const choice = dialog.showMessageBoxSync(window, confirmDialogOptions);
+        if (choice === 1) return Promise.resolve('discarded');
+        if (choice !== 0 || window.isDestroyed()) return Promise.resolve('cancelled');
+        return sendSaveRequest();
+    }
     ipcMain.handle('director-files', async (event, input) => {
         if (!trusted(event)) return { ok: false, error: '拒绝未知页面' };
         try {
@@ -29,30 +64,32 @@ function attachFiles(window) {
             throw Error('未知文件操作');
         } catch (e) { return { ok: false, error: e.code ? '文件操作失败，请检查目录权限、磁盘空间或文件占用。工程仍保留在编辑器中。' : e.message }; }
     });
-    const closeResult = (event, result) => {
-        if (!trusted(event) || !closeRequest || result?.id !== closeRequest) return;
-        closeRequest = '';
-        if (result.saved === true) { allowClose = true; window.close(); }
-    };
     ipcMain.on('director-save-close-result', closeResult);
     const download = (_event, item, contents) => {
         if (contents && contents !== window.webContents) return;
         item.setSaveDialogOptions({ title: '保存导演台文件', defaultPath: host.defaultPath(item.getFilename()) });
     };
     session.on('will-download', download);
-    window.webContents.on('did-start-loading', () => { closeRequest = ''; allowClose = false; });
+    window.webContents.on('did-start-loading', () => {
+        // A reload supersedes an in-flight exit confirmation; the window and the storage service
+        // stay untouched and the awaiter observes an honest 'cancelled'.
+        if (exitConfirm) { const resolve = exitConfirm.resolve; exitConfirm = null; resolve('cancelled'); }
+    });
     window.on('closed', () => {
         ipcMain.removeHandler('director-files'); ipcMain.removeListener('director-save-close-result', closeResult);
         session.removeListener('will-download', download);
     });
-    return { ready: host.ready, preventUnload(event) {
-        if (allowClose) { event.preventDefault(); return; }
-        if (closeRequest) return;
-        const choice = dialog.showMessageBoxSync(window, { type: 'question', title: '退出导演台',
-            message: '是否保存当前工程后退出？', detail: '保存取消或失败时会留在编辑器。正在编辑或导出的任务需先完成或取消。',
-            buttons: ['保存并退出', '不保存退出', '取消'], defaultId: 0, cancelId: 2, noLink: true });
-        if (choice === 1) { allowClose = true; event.preventDefault(); }
-        if (choice === 0) { closeRequest = randomUUID(); window.webContents.send('director-save-before-close', { id: closeRequest }); }
-    } };
+    return { ready: host.ready, confirmExit,
+        // Navigation/reload protection (renderer beforeunload) keeps its synchronous dialog.
+        // Saving from here registers the SAME shared confirmation (no second dialog) and hands
+        // the exit to the unified coordinator via 'save-exit-requested'.
+        preventUnload(event) {
+            if (exitConfirm) return null; // a confirmation is already in flight; keep unload prevented
+            const choice = dialog.showMessageBoxSync(window, confirmDialogOptions);
+            if (choice === 1) { event.preventDefault(); return null; } // leave without saving
+            if (choice === 2) return null; // stay in the editor
+            void sendSaveRequest();
+            return 'save-exit-requested';
+        } };
 }
 module.exports = { attachFiles };
