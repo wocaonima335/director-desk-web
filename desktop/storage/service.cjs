@@ -122,6 +122,24 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
     const db = library ?? openLibrary({ file: path.join(root, 'library.sqlite'), now });
     const sessions = new Map(); // sessionId -> session
     const transfers = new Map(); // transferId -> transfer
+    // RP3: host-wide transfer permits — an independent identity set bounded by
+    // HOST_MAX_TRANSFERS. A transfer holds EXACTLY ONE permit while its pending initialization
+    // (upload trustedSubdir/open, download getObject) is unfinished OR while it is ready, and
+    // never two: the pending->ready handoff keeps the same permit. Both directions check the
+    // permit budget synchronously together with the transfer map and the session slot, before
+    // the first await, so the 17th request is refused without entering I/O. Cancelling a
+    // pending transfer removes it from the map and frees the session slot immediately, but the
+    // permit is held until the initialization settles (its outcome is known and no further
+    // transfer I/O will be started for it) — a cancelled transfer can therefore never be
+    // replaced beyond the 16-slot host budget, and cancel loops cannot accumulate pending
+    // initializations. An initialization that never settles correctly keeps holding its permit
+    // (no fake timeout clears it). Exit-drain accounting stays with RP2
+    // (pendingOperations/pendingCleanups); permits only gate NEW transfer admission.
+    const hostPermits = new Set();
+    /** RP3: idempotent release — a late settle releases only its own identity's permit. */
+    function releaseHostPermit(transfer) {
+        hostPermits.delete(transfer);
+    }
     let pendingOperations = 0; // R10: in-flight handler operations (incl. dialog waits)
     let disposed = false;
     // RP1: monotonically advancing request generation. Every dispatch captures the current
@@ -235,14 +253,24 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
     }
 
     async function cancelTransfer(transfer, reason) {
-        if (!transfers.has(transfer.transferId)) return;
+        // RP3: identity-guarded removal — a late settle of an old transfer can never remove a
+        // replacement transfer's registration or clear its session slot.
+        if (transfers.get(transfer.transferId) !== transfer) return;
         transfer.cancelled = reason; // R7: queued operations observe this before touching state
         transfers.delete(transfer.transferId);
         const session = sessions.get(transfer.sessionId);
         if (session) {
-            if (transfer.kind === 'upload') session.uploadTransferId = undefined;
-            else session.downloadTransferId = undefined;
+            if (transfer.kind === 'upload') {
+                if (session.uploadTransferId === transfer.transferId) session.uploadTransferId = undefined;
+            } else if (session.downloadTransferId === transfer.transferId) {
+                session.downloadTransferId = undefined;
+            }
         }
+        // RP3: a READY transfer releases its host permit right away — its remaining close/rm
+        // work is RP2-tracked background cleanup. A transfer still awaiting its initialization
+        // I/O keeps the permit; the initialization continuation releases it when the I/O
+        // settles (it clears transfer.initializing first).
+        if (!transfer.initializing) releaseHostPermit(transfer);
         if (transfer.kind === 'upload') {
             // RP2/R2: cleanup failures are recorded in the unresolved-cleanup ledger and are
             // surfaced through the exit drain as an explicit blocked result — and really retried
@@ -465,7 +493,10 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
             if (session.uploadTransferId || session.downloadTransferId) {
                 return fail('transfer-limit', '每个页面同时只能有一个进行中的工程传输');
             }
-            if (transfers.size >= HOST_MAX_TRANSFERS) return fail('transfer-limit', '存储传输总数已达上限，请稍后重试');
+            // RP3: the host budget is the independent permit set — it also counts cancelled
+            // pending initializations that have not settled yet — checked synchronously before
+            // any await, together with the map/session reservation below.
+            if (hostPermits.size >= HOST_MAX_TRANSFERS || transfers.size >= HOST_MAX_TRANSFERS) return fail('transfer-limit', '存储传输总数已达上限，请稍后重试');
             const counts = frameTransferCounts(currentEvent());
             if (counts.uploads >= STORAGE_MAX_TRANSFERS_PER_FRAME) return fail('transfer-limit', '已存在进行中的上传');
             let project;
@@ -486,15 +517,28 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                 kind: 'upload', transferId, sessionId: session.sessionId, projectId: session.projectId,
                 declaredLength: data.declaredLength, name: data.name, expectedRevision: Number(data.expectedRevision),
                 received: 0, handle: null, tmpPath, startedAt: now(), lastActivity: now(), event: currentEvent(),
-                queue: Promise.resolve(), cancelled: undefined,
+                queue: Promise.resolve(), cancelled: undefined, initializing: true,
             };
             transfers.set(transferId, transfer);
             session.uploadTransferId = transferId;
+            hostPermits.add(transfer); // RP3: one host permit from the synchronous reservation on
             try {
                 await store.trustedSubdir(UPLOADS_DIR);
+                // RP3: a cancel/reload that landed during trustedSubdir skips the NEXT (not yet
+                // started) I/O and settles its permit here instead of after the open.
+                if (transfer.cancelled || !transfers.has(transferId) || !sessions.has(session.sessionId) || requestGone()) {
+                    transfer.initializing = false;
+                    releaseHostPermit(transfer);
+                    try { await fsp.rm(tmpPath, { force: true }); }
+                    catch (error) { recordUnresolvedCleanup(transfer, 'rm', error); }
+                    if (transfers.has(transferId)) await cancelTransfer(transfer, 'session-closed');
+                    return fail('unknown-session', '存储会话已关闭，上传未创建');
+                }
                 transfer.handle = await fsp.open(tmpPath, 'wx');
             } catch (error) {
+                transfer.initializing = false; // RP3: the initialization settled (failed)
                 await cancelTransfer(transfer, 'tmp-open-failed');
+                releaseHostPermit(transfer);
                 if (error && error.reason === 'path-refused') return projectErrorToFailure(error);
                 return fail('io-failure', '上传临时文件创建失败');
             }
@@ -506,6 +550,8 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                 // up directly so neither the handle nor the .part file outlives the frame.
                 // RP2/R2: real failures here join the unresolved-cleanup ledger like everywhere
                 // else — only "already closed" is tolerated, never a genuine resource leak.
+                transfer.initializing = false; // RP3: initialization settled; the handoff is refused
+                releaseHostPermit(transfer);   // idempotent if a cancel already released it
                 try { await transfer.handle?.close(); }
                 catch (error) { if (!isAlreadyClosedError(error)) recordUnresolvedCleanup(transfer, 'close', error); }
                 try { await fsp.rm(tmpPath, { force: true }); }
@@ -513,6 +559,7 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                 if (transfers.has(transferId)) await cancelTransfer(transfer, 'session-closed');
                 return fail('unknown-session', '存储会话已关闭，上传未创建');
             }
+            transfer.initializing = false; // RP3: pending->ready handoff keeps the SAME permit
             return ok('storage.v1.upload.begin', { transferId, declaredLength: data.declaredLength, chunkSize: STORAGE_CHUNK_BYTES });
         },
         'storage.v1.upload.chunk': async data => {
@@ -623,7 +670,8 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                 // registration window; a transfer that lost the race never registers (no cancel
                 // success followed by a late commit).
                 transfers.delete(transfer.transferId);
-                session.uploadTransferId = undefined;
+                if (session.uploadTransferId === transfer.transferId) session.uploadTransferId = undefined;
+                releaseHostPermit(transfer); // RP3: synchronous release inside the zero-await arbitration section
                 try {
                     db.commitSnapshot({
                         projectId: transfer.projectId,
@@ -686,6 +734,10 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
             }
             const counts = frameTransferCounts(currentEvent());
             if (counts.downloads >= STORAGE_MAX_TRANSFERS_PER_FRAME) return fail('transfer-limit', '已存在进行中的下载');
+            // RP3: the previously missing host-wide reservation — downloads draw from the same
+            // 16-permit budget as uploads, checked synchronously together with the map/session
+            // registration below, BEFORE the first await: the 17th download never enters I/O.
+            if (hostPermits.size >= HOST_MAX_TRANSFERS || transfers.size >= HOST_MAX_TRANSFERS) return fail('transfer-limit', '存储传输总数已达上限，请稍后重试');
             // F04: the slot is reserved synchronously BEFORE any await — two concurrent reads can
             // no longer both slip through the check while the object is being read.
             const transferId = randomUUID();
@@ -693,10 +745,11 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                 kind: 'download', transferId, sessionId: session.sessionId, projectId: session.projectId,
                 bytes: null, pending: true, offset: 0, snapshot: null,
                 startedAt: now(), lastActivity: now(), event: currentEvent(),
-                queue: Promise.resolve(), cancelled: undefined,
+                queue: Promise.resolve(), cancelled: undefined, initializing: false,
             };
             transfers.set(transferId, transfer);
             session.downloadTransferId = transferId;
+            hostPermits.add(transfer); // RP3: one host permit from the synchronous reservation on
             try {
                 let project, snapshot;
                 try {
@@ -714,15 +767,29 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                     await cancelTransfer(transfer, 'unknown-snapshot');
                     return fail('unknown-snapshot', '快照不存在');
                 }
-                const bytes = await store.getObject(session.projectId, snapshot.digest, snapshot.length);
+                // RP3: the initialization I/O starts — the permit is held across any cancel that
+                // only leaves the map/session in the meantime, until the I/O settles here.
+                transfer.initializing = true;
+                let bytes;
+                try {
+                    bytes = await store.getObject(session.projectId, snapshot.digest, snapshot.length);
+                } finally {
+                    transfer.initializing = false; // settled: no further initialization I/O either way
+                }
                 // F04: the object read awaited — re-check that this transfer is still the live one.
                 // RP1: requestGone() extends this to a generation bumped by reload/close.
                 if (transfer.cancelled || !transfers.has(transferId) || !sessions.has(session.sessionId) || requestGone()) {
+                    // RP3: terminate idempotently — this also covers a sender destroyed WITHOUT
+                    // any close event (only requestGone() fired): the map, the session slot and
+                    // the host permit must not leak. The identity guard inside cancelTransfer
+                    // keeps a replacement transfer's registration untouched.
+                    await cancelTransfer(transfer, 'session-closed');
+                    releaseHostPermit(transfer);
                     return fail('unknown-transfer', '下载已取消或结束');
                 }
                 transfer.bytes = bytes;
                 transfer.pending = false;
-                transfer.snapshot = snapshot;
+                transfer.snapshot = snapshot; // RP3: pending->ready handoff keeps the SAME permit
                 return ok('storage.v1.snapshot.read', {
                     snapshot: { version: 'dsk.v1', snapshotId: snapshot.snapshotId, projectId: session.projectId, revision: snapshot.revision, digest: snapshot.digest, createdAt: snapshot.createdAt },
                     transferId,
@@ -732,6 +799,7 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                 });
             } catch (error) {
                 await cancelTransfer(transfer, 'read-failed');
+                releaseHostPermit(transfer); // RP3: idempotent settle release
                 return projectErrorToFailure(error);
             }
         },
@@ -751,7 +819,8 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                 if (final) {
                     transfers.delete(transfer.transferId);
                     const session = sessions.get(transfer.sessionId);
-                    if (session) session.downloadTransferId = undefined;
+                    if (session && session.downloadTransferId === transfer.transferId) session.downloadTransferId = undefined;
+                    releaseHostPermit(transfer); // RP3: the final chunk returns the host permit
                 }
                 return ok('storage.v1.snapshot.download.chunk', {
                     offset: start, data: slice.toString('base64'), final,
@@ -1221,6 +1290,8 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
             drainState: () => closedResult ? 'ready'
                 : drainPromise ? 'draining' : 'blocked-retryable',
             pendingCleanupCount: () => pendingCleanups.size,
+            // RP3: read-only permit accounting (test/inspection only, not part of the IPC surface).
+            hostPermitCount: () => hostPermits.size,
             unresolvedCleanupCount: () => unresolvedCleanups.size,
             inflightCleanupCount: () => inflightCleanups.size,
             dbOpen: () => { try { db.listProjects({ limit: 1 }); return true; } catch { return false; } },

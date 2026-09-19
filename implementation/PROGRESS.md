@@ -2,11 +2,11 @@
 
 记录日期：2026-09-15。
 
-## 最新状态：RP1 PASS、RP2关联修订待审的冻结检查点
+## 最新状态：RP2 局部 PASS；RP3 返工实施完成、复审因额度中断的冻结检查点
 
-以根目录[进度.md](../进度.md)、[RP1实施报告](DSK-004-RP1.md)、[RP2实施报告](DSK-004-RP2.md)为当前依据。DSK-001～003及SQLite门禁既有PASS保留；父DSK-004仍REWORK。RP1及关联验证独立PASS；RP2两轮后REPLAN，其ownership-01关联修订已实施、coder记录537项测试通过，但最新独立审查被取消无结论。RP3～RP8尚未开始。
+以根目录[进度.md](../进度.md)、[RP1报告](DSK-004-RP1.md)、[RP2报告](DSK-004-RP2.md)、[RP3报告](DSK-004-RP3.md)为当前依据。DSK-001～003及SQLite门禁既有PASS保留；父DSK-004仍REWORK。RP1、RP2及ownership-01独立PASS；RP3已实施统一host16 permit并完成首轮返工覆盖补齐，coder记录RP3全集21/21、两套件86/86、npm 558/558，service无业务改动；其复审调用因模型额度中断，无结论。RP4～RP8未开始。
 
-按负责人要求冻结并提交`checkpoint/dsk-003-progress`，不代表验收或发布。恢复第一步为独立审查ownership-01，不重复编码或直接进入RP3。原始tmp日志与prepared产物不随Git同步。下方旧A/B及门禁状态均为历史，不覆盖本段。
+按负责人要求冻结并提交`checkpoint/dsk-003-progress`，不代表验收或发布。恢复第一步为director-reviewer完成RP3复审，不先编码或进入RP4。原始tmp日志与prepared产物不随Git同步。下方旧A/B及门禁状态均为历史，不覆盖本段。
 
 下文是前一轮机器/分支检查点的历史，尤其旧SQLite门禁REWORK和003返工描述不应覆盖最新结论；当前实际工作目录为`E:/myProgram/DirectorDesk/director-desk-web`。
 

@@ -33,6 +33,7 @@ async function buildBundle(entry, { fspGate = false } = {}) {
 
 const contractsPromise = buildBundle(path.join(repo, 'shared', 'contracts', 'index.ts'), {}).then(mod => mod);
 const libraryPromise = buildBundle(path.join(repo, 'desktop', 'storage', 'library.cjs'), {});
+const objectsPromise = buildBundle(path.join(repo, 'desktop', 'storage', 'objects.cjs'), {});
 const servicePromise = buildBundle(SERVICE_ENTRY, {});
 const gatedServicePromise = buildBundle(SERVICE_ENTRY, { fspGate: true });
 
@@ -712,4 +713,101 @@ test('RP2: the unavailable fallback service dispose resolves with a consistent s
     assert.deepEqual(result, { ok: true });
     const bootstrap = await unavailable.handlers['storage.v1.session.bootstrap']({});
     assert.equal(bootstrap.ok, false);
+});
+
+/** RP3 A9: disposing while a PENDING initialization is parked, in three deterministic phases.
+ * Phase 1: the drain-initiated closeFrameSessions cancels the pending upload — it leaves the
+ * transfer map immediately, but its handler is still awaiting the initialization I/O, so the
+ * drain must report blocked (timeout) with the database OPEN and db.close NEVER called.
+ * Phase 2: the initialization settles (honest failure, handler done) but its DETACHED cleanup
+ * rm is still parked behind the real fsp gate — the drain must STAY blocked with the DB open.
+ * Phase 3: the cleanup really lands; a retry closes the database EXACTLY once (recorded by a
+ * counting library wrapper) and a repeated dispose returns the cached success without closing
+ * again — dbOpen false alone does not prove close-once, the counter does. All barriers use
+ * entry/release signals (no timing guesses) and are failure-proof released in finally. Both
+ * the pre-fix and current sources satisfy this (compat guard): the pending handler counts as
+ * pendingOperations before RP3 as well. */
+test('RP3 A9: dispose waits for a cancelled pending initialization (map empty, handler outstanding, then its detached cleanup), stays blocked with the DB open and db.close is called exactly once in total', async () => {
+    const contracts = await contractsPromise;
+    const { createStorageService } = await gatedServicePromise;
+    const { createObjectStore } = await objectsPromise;
+    const { openLibrary } = await libraryPromise;
+    const root = freshRoot('rp3-pending-init');
+    const realStore = createObjectStore({ root });
+    let releaseTrusted = null;
+    let trustedParks = 0;
+    let signalTrustedArrival = null;
+    const trustedArrival = new Promise(resolve => { signalTrustedArrival = resolve; });
+    const store = {
+        ...realStore,
+        async trustedSubdir(...args) {
+            if (releaseTrusted === null && trustedParks === 0) {
+                trustedParks += 1;
+                signalTrustedArrival(); // entry signal: the initialization is parked from here on
+                await new Promise(resolve => { releaseTrusted = resolve; });
+            }
+            return realStore.trustedSubdir(...args);
+        },
+    };
+    const realLibrary = openLibrary({ file: path.join(root, 'library.sqlite'), now: () => Date.now() });
+    let dbCloseCount = 0;
+    const library = { ...realLibrary, close() { dbCloseCount += 1; realLibrary.close(); } };
+    const svc = createStorageService({ root, objects: store, library, dialog: null, verifiers: verifiersFrom(contracts) });
+    const call = (action, data) => svc.runInRequestContext(FRAME, () => svc.handlers[action](data));
+    const gate = gates();
+    let begin;
+    try {
+        const created = await call('project.create', { name: 'RP3挂起初始化' });
+        assert.equal(created.ok, true);
+        // Arm BEFORE the cancel: the FIRST .part rm parks behind rmGate (the detached cleanup).
+        gate.rmMatched = false;
+        gate.rmMatch = target => typeof target === 'string' && target.endsWith('.part');
+        gate.rmGate = new Promise(resolve => { gate.releaseRm = resolve; });
+        begin = call('storage.v1.upload.begin', { sessionId: created.data.sessionId, expectedRevision: 0, declaredLength: 16 });
+        await trustedArrival; // deterministic: the initialization is parked now
+        assert.equal(trustedParks, 1, 'the upload initialization must really be parked');
+        assert.equal(svc._internal.transfers.size, 1, 'the pending initialization holds its transfer slot');
+        assert.equal(svc.isBusy(), true, 'the parked initialization must count as busy');
+        // Phase 1: the drain cancels the pending initialization (map empties synchronously)
+        // but the handler is still parked — blocked with the DB open, close never called.
+        const draining = svc.dispose({ timeoutMs: 300 });
+        assert.equal(svc._internal.transfers.size, 0, 'the drain-initiated cancel must empty the map synchronously');
+        assert.equal(dbOpen(svc), true, 'the in-flight handler keeps the database open');
+        const blocked = await draining;
+        assert.equal(blocked.ok, false, `dispose must stay blocked while the initialization is parked: ${JSON.stringify(blocked)}`);
+        assert.equal(blocked.blocked, 'timeout');
+        assert.equal(dbOpen(svc), true, 'a blocked dispose must keep the database open');
+        assert.equal(dbCloseCount, 0, 'no blocked dispose may close the database');
+        // Phase 2: the initialization settles (honest failure, handler DONE) while its detached
+        // cleanup rm is still parked — the drain must STAY blocked with the DB open.
+        releaseTrusted();
+        const beginResult = await begin;
+        assert.equal(beginResult.ok, false, 'the cancelled upload must fail honestly');
+        assert.equal(svc.pendingOperationCount(), 0, 'the handler is done once the initialization settles');
+        assert.ok(svc._internal.pendingCleanupCount() >= 1, 'the detached cleanup rm must still be parked');
+        const blocked2 = await svc.dispose({ timeoutMs: 300 });
+        assert.equal(blocked2.ok, false, `the outstanding detached cleanup must keep the drain blocked: ${JSON.stringify(blocked2)}`);
+        assert.equal(blocked2.blocked, 'timeout');
+        assert.equal(dbOpen(svc), true, 'the outstanding cleanup keeps the database open');
+        assert.equal(dbCloseCount, 0, 'still no close while a cleanup is outstanding');
+        // Phase 3: the cleanup really lands — the retry closes EXACTLY once.
+        gate.releaseRm();
+        const retry = await svc.dispose({ timeoutMs: 3000 });
+        assert.equal(retry.ok, true, `受控重试应在初始化落地并清理后成功：${JSON.stringify(retry)}`);
+        assert.equal(dbCloseCount, 1, `the database must close exactly once in total, got ${dbCloseCount}`);
+        assert.equal(dbOpen(svc), false);
+        // A repeated dispose returns the cached success and never closes again.
+        const repeat = await svc.dispose({ timeoutMs: 1000 });
+        assert.equal(repeat.ok, true, 'the repeated dispose returns the cached closed result');
+        assert.equal(dbCloseCount, 1, 'the repeated dispose must never close again');
+    } finally {
+        releaseTrusted?.(); // failure-proof release: a parked initialization never outlives the test
+        gate.releaseRm?.();  // failure-proof release: a parked cleanup never outlives the test
+        gate.rmMatch = null;
+        gate.rmGate = null;
+        gate.rmMatched = false;
+    }
+    const uploadsDir = path.join(root, 'uploads');
+    const leftovers = fsSyncExists(uploadsDir) ? fs.readdirSync(uploadsDir) : [];
+    assert.deepEqual(leftovers, [], 'the cancelled pending initialization must not leave a .part file');
 });

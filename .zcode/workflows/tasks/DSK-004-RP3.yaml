@@ -1,0 +1,87 @@
+task_id: DSK-004-RP3
+title: "统一host16上传下载及初始化配额"
+status: IMPLEMENTED # round1窄返工完成（agent_a4dacbb5 R1/R2/R3覆盖项，service零改动）；RP3全集21/21+两套件86/86+npm 558/558；待复审，父DSK-004仍REWORK
+source_root: "E:/myProgram/DirectorDesk/director-desk-web"
+base_commit: "cc10acef36f971cfa2ad1ad82bdbd342679c01d1"
+initial_worktree: "初始仅RP2及ownership-01两任务的主会话PASS登记修改；本任务单新增。编码前保存实际status及相关文件内容快照，不假称clean。"
+contract_version: "现有公共IPC/错误/schema/工程格式不变"
+approval:
+  approved: true
+  reference: "已获批RP1-RP8计划plan-sess_0f45933a-bf18-47df-952f-6fdc936de21f.md第14/30行；Ethan要求继续；planner agent_523d3657细化PLAN_READY，无新增scope。"
+goal: "上传下载和未终结初始化共用独立身份permit上限16，第17同步拒绝不启动I/O；取消pending后仍占permit至初始化settle。"
+context_files:
+  - "AGENTS.md"
+  - ".zcode/workflows/README.md"
+  - ".zcode/plans/plan-sess_0f45933a-bf18-47df-952f-6fdc936de21f.md"
+  - "desktop/storage/service.cjs"
+  - "shared/contracts/storage.ts"
+  - "tests/dsk-storage.test.cjs"
+  - "tests/dsk-rp2-dispose.test.cjs"
+allowed_changes:
+  - "desktop/storage/service.cjs仅配额permit生命周期及自身登记清理。"
+  - "tests/dsk-storage.test.cjs新增RP3反例/回归及最小既有harness扩展。"
+  - "tests/dsk-rp2-dispose.test.cjs仅pending初始化取消与排空兼容测试，不弱化旧断言。"
+  - "本任务单、implementation/DSK-004-RP3.md、进度.md最新RP1/RP2通过与RP3记录；新唯一tmp证据。"
+non_goals:
+  - "不改公共契约/依赖/host16/64MiB/既有frame方向限制/session互斥，不做RP4读取/RP5编码。"
+  - "不重写RP2drain，不改objects/renderer/其他生产文件，不重门禁不commit/push。"
+design:
+  permit: "独立身份Set：initializing或active任一成立持有恰1permit；两者同时不能双计。两方向第一await前原子检查并登记permit+map+session。"
+  cancellation: "pending取消立即离开map/session，但permit直到初始化不再等待/启动I/O才释放；迟到settle只操作自己身份，释放幂等，不能扣新transfer配额。"
+  handoff: "pending->ready保持同一permit不释放重取；上传整个trustedSubdir/open、下载getObject及判定均覆盖。ready取消/commit/末chunk归还；cleanup由RP2单独跟踪。"
+  registration: "map.get(id)===transfer才移除；session槽值===id才清除；sender销毁无close通知的迟到分支也幂等终结。"
+acceptance:
+  - "A1：16跨frame pending下载占满，第17transfer-limit且getObject启动仍16。"
+  - "A2：16上传、第17下载，mixed U/D pending/ready满16双方向均拒。"
+  - "A3：15槽时U->D和D->U同tick竞争最后槽，恰1成功另一不启动I/O。"
+  - "A4：pending的abort/expiry/close/reload取消后map/session归还但I/O未settle时仍占host；两方向均覆盖，不得取消循环积累第17个初始化。"
+  - "A5：handoff无双计无空档，迟到resolve/reject不成功/复活/多释放。"
+  - "A6：初始化查找/无快照/读取/目录/open失败及ready abort/过期/close/reload/commit成功失败/download末块准确释放，非末块保留。"
+  - "A7：旧传输迟到不清新槽/permit；sender.destroyed无close事件不遗留。"
+  - "A8：原frame各方向1、session互斥语义保持。"
+  - "A9：取消pending后map0但dispose仍等handler/cleanup且timeout blocked DB开；settle且清理完成后close一次。"
+verification:
+  - "具名有效红例先行：下载缺host检查及取消pending提前归还两类独立反例，用可达barrier与计数，finally释放测试资源，不用长sleep猜时序。"
+  - "node --experimental-strip-types --test tests/dsk-storage.test.cjs tests/dsk-rp2-dispose.test.cjs"
+  - "npm test"
+side_effects_approved:
+  - "本地隔离临时测试数据/日志，现有harness打包；不安装或访问真实业务。"
+dependencies:
+  - "RP1 PASS"
+  - "RP2及ownership-01经agent_303386b4最终独立PASS"
+rollback: "只撤本任务精确增量，保留已有管理修改/用户数据/旧证据，不reset/clean。"
+implementation:
+  agent: director-coder
+  changed_files:
+    - "desktop/storage/service.cjs（仅permit生命周期：独立身份hostPermits Set上限16、两方向第一await前原子检查+登记、pending取消留permit至settle、handoff同permit、身份守卫map/session移除、download补host检查、sender销毁无close主动幂等取消、commit零await仲裁区内同步释放、_internal.hostPermitCount只读钩子）"
+    - "tests/dsk-storage.test.cjs（新增RP3段13用例：A1/A2/A3/A4×4/A5/A6×3/A7/A8；真实objects/library/randomUUID既有DI+真实I/O屏障，DSK_RP3_SERVICE_ENTRY快照入口红跑）"
+    - "tests/dsk-rp2-dispose.test.cjs（仅新增A9挂起初始化取消与排空兼容用例+objects bundle promise；旧断言零改动）"
+    - "implementation/DSK-004-RP3.md、本任务单、进度.md最新记录、tmp/dsk-004-rp3-coder-20260919T015354Z新证据（修前快照sha256 3f5a751f…、兄弟副本provenance、红/绿日志、COMMANDS.txt）"
+  checks:
+    - "红跑未修快照 → exit 1（13用例恰8具名红：17下载=17次getObject/mixed第9下载=9（8 ready上传+8 pending下载，round1更正归因：非16真实上传后的第一下载，该方向由round1 R2独立用例补足）/15槽同tick败者I/O=16/abort pending替换入=17/map0取消循环累积=32并发/上传pending取消新上传=17/sweeper过期重入=32/sender销毁僵尸=1；5兼容对照绿；red-storage-rp3.log）"
+    - "A9对快照 → exit 0（red-rp2-dispose-rp3a9.log，兼容设计）"
+    - "node --experimental-strip-types --test --test-name-pattern RP3 tests/dsk-storage.test.cjs → 0（13/13）；RP3 A9 dispose → 0（1/1）"
+    - "node --experimental-strip-types --test tests/dsk-storage.test.cjs tests/dsk-rp2-dispose.test.cjs → 0（79/79，含RP1/RP2全部旧用例不回归）"
+    - "npm test → 首跑550/551（唯一失败为既有RP2 F1用例closeParked≥1冷负载时序边缘，机制RP3零触碰，独立复跑dispose 3×15/15均过）→ 立即复跑0（551/551，green-npm-test-2.log）；两次日志均如实保留"
+    - "未跑：build/desktop:prepare/桌面脚本（属RP2/RP8边界）；未commit/push"
+  rework_round1:
+    issues: "审查agent_a4dacbb5 REWORK三组：R1 A5替代发生在旧settle后不能证迟到不清新槽；R2 A2名16uploads实为mixed、缺16真实上传独立满槽测、旧红getObject9归因错；R3 缺open已启动未回handle尾段/db.commitSnapshot登记失败（badJSON不等DB失败）/A9缺settle后cleanup独立挂起与db.close计数。未确认生产缺陷。"
+    fixes: "service.cjs零改动（哈希bb7224bd前后一致）。新增R1×4（逐调用真实getObject屏障+确定性到达信号：旧取消未settle→新transfer已占位→旧迟到resolve/reject落地，断言新map对象同一性/槽/permit恰降1/真实走完；覆盖reload新代与跨frame变体，旧码绿如实标覆盖性控制）；A2改名mixed准确化+新增R2 16真实上传满槽第17下载拒且getObject=0（旧码红=16U方向有效具名红）；新增R3 open尾段（真实fsp.open门+handle close计数代理：取消后permit撑满/第17拒/迟到handle真实close且begin不成功/自身.part清理；旧码红属round0已修同族缺陷体现，非新生产缺陷，独立探针佐证，未改生产）与R3 DB登记失败（commitSnapshot抛database-locked后map/槽/permit释放revision不动，新旧均绿）；A9重写三阶段（handler挂起blocked→settle后detached cleanup独立挂起仍blocked/DB开/close=0→cleanup落地关库db.close恰1且重复dispose仍1，计数器取代dbOpen作close-once证据）。旧红getObject9归因在check/报告纠正，旧tmp日志不改。"
+    checks:
+      - "新/改名用例工作树9/9绿（round1-green-new.log）；RP3全集21/21（round1-green-rp3-all.log）；两套件86/86（round1-green-two-suites.log）"
+      - "快照行为定界：R2旧码红、R1×4/R3-b旧码绿=覆盖（round1-snapshot-behavior.log）；R3-a首次快照跑因buildGatedService未走DSK_RP3_SERVICE_ENTRY误打包工作树源——结果作废注明；修正入口后旧码红于第17准入断言（round1-r3-snapshot.log），与独立esbuild探针结论一致"
+      - "npm test首跑546/558（两个失败文件desktop-dev/dsk-rp2-exit均非本任务改动文件，隔离复跑3/3与24/24全绿，成因未证实仅记负载/顺序抖动疑点，不声称生产回归，round1-green-npm.log原样保留）→立即复跑558/558绿（round1-green-npm-2.log）；round0 F1 closeParked未再复现"
+      - "round1前后测试源快照与哈希存round1/pre-round1/；最终哈希dsk-storage 568dbe94/dsk-rp2-dispose 0759ee92/service bb7224bd（未改）；逐命令CMD/UTC/CWD/EXIT见COMMANDS.txt ROUND1段"
+  blockers: []
+review:
+  agent: director-reviewer
+  verdict: REWORK # round1（agent_a4dacbb5-2523-4b73-b5ef-393aad21ca07）三组覆盖/声明问题已按窄返工补齐，IMPLEMENTED待复审
+  reference: "R1 迟到settle证明力不足；R2 A2名称失实+16真实上传方向缺测+旧红getObject9归因错；R3 缺open尾段/DB登记失败/A9 cleanup独立挂起与close计数。未确认生产缺陷，原则不改service——round1 service零改动（bb7224bd一致）。"
+  findings:
+    - "R1：旧gate settle先于replacement，不能证旧请求迟到不清新槽——已补4用例（双独立屏障+到达信号+同一性/槽/permit/真实完成断言+reload新代/跨frame变体）。"
+    - "R2：A2实为mixed已改名；新增16真实上传满槽独立用例（旧码红）；旧红getObject9更正为mixed第9下载（任务/报告已纠正，旧日志不改）。"
+    - "R3：补open已启动未回handle尾段（真实fs门+close计数，旧码红属round0已修同族、非新生产缺陷）、db.commitSnapshot登记失败、A9三阶段+db.close计数恰一次；均实测，无伪造红。"
+  unverified:
+    - "npm首跑desktop-dev/dsk-rp2-exit两文件失败的成因未证实（非本任务改动文件，隔离与复跑均绿），仅记录负载/顺序抖动疑点。"
+    - "round0 F1 closeParked具体成因未证实（时序不确定），原cold-load表述已在报告更正。"
+  rework_rounds: 1

@@ -1,6 +1,10 @@
 task_id: DSK-004-RP2
 title: "确认保存后可等待的存储排空与统一退出"
-status: REPLAN # 两次返工后最终独立审查未通过；F3/F4由获批ownership-01关联修订承接，尚待审，父任务REWORK
+status: PASS # 关联ownership-01最终独立PASS，继承原已认可部分；父DSK004仍REWORK
+final_acceptance:
+  reference: "agent_303386b4-1b52-4b30-965f-261d54a3e593于cc10ace独立审查ownership-01通过，允许RP2局部PASS及推进RP3。"
+  history: "原review REPLAN/rework_rounds2及失败证据不改；仅新增最终通过记录。"
+  limitations: "原生人工UI/Windows11/断电/安装包未验收；关联N1/N2测试覆盖与证据边界保留。"
 source_root: "E:/myProgram/DirectorDesk/director-desk-web"
 base_commit: "99c2582ee50e7abe1caa480628db360dd3fd9e66"
 initial_worktree: "继承RP1/关联验证全部未提交源码测试与记录、当前会话已批准计划；主会话新增RP2任务单。编码前保存实际status及相关文件快照，不回HEAD覆盖。"

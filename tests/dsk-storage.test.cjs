@@ -52,11 +52,16 @@ const state = globalThis.__rp1FspGates || {
     rmMatch: null, rmMatched: false, rmCalls: 0, rmGate: null,
     mkdirMatch: null, mkdirMatched: false, mkdirCalls: 0, mkdirGate: null,
     rmRejectMatch: null, rmRejectCalls: 0, rmRejectPath: null, rmRejectCode: null, rmRejectError: null,
+    openMatch: null, openMatched: false, openCalls: 0, openGate: null,
+    openProxyMatch: null, proxiedHandles: 0, handleCloses: 0,
 };
 globalThis.__rp1FspGates = state;
 // Normalize fields introduced by this wrapper revision when the shared state was created
 // earlier in this process without them (never reset fields: cross-bundle gates must survive).
 if (typeof state.rmRejectCalls !== 'number') state.rmRejectCalls = 0;
+if (typeof state.openCalls !== 'number') state.openCalls = 0;
+if (typeof state.proxiedHandles !== 'number') state.proxiedHandles = 0;
+if (typeof state.handleCloses !== 'number') state.handleCloses = 0;
 function gated(kind, args, call) {
     const match = kind === 'rm' ? state.rmMatch : state.mkdirMatch;
     const done = kind === 'rm' ? 'rmMatched' : 'mkdirMatched';
@@ -68,6 +73,32 @@ function gated(kind, args, call) {
     return call();
 }
 module.exports = {
+    // RP3-R3: real open gate — the FIRST predicate-matched call parks BEFORE the real open
+    // (pass-through when unarmed); an optional proxy counts REAL handle closes afterwards.
+    async open(...args) {
+        state.openCalls = (state.openCalls || 0) + 1;
+        if (typeof state.openMatch === 'function' && !state.openMatched && state.openMatch(...args)) {
+            state.openMatched = true;
+            if (state.openGate) await state.openGate;
+        }
+        const handle = await real.open(...args);
+        if (typeof state.openProxyMatch === 'function' && state.openProxyMatch(...args)) {
+            state.proxiedHandles = (state.proxiedHandles || 0) + 1;
+            return new Proxy(handle, {
+                get(target, prop) {
+                    if (prop === 'close') {
+                        return async () => {
+                            state.handleCloses = (state.handleCloses || 0) + 1;
+                            return target.close();
+                        };
+                    }
+                    const value = Reflect.get(target, prop);
+                    return typeof value === 'function' ? value.bind(target) : value;
+                },
+            });
+        }
+        return handle;
+    },
     rm(...args) {
         state.rmCalls += 1;
         if (typeof state.rmRejectMatch === 'function' && state.rmRejectMatch(...args)) {
@@ -2085,4 +2116,1133 @@ test('RP1 R02 red: a reload during the staging mkdir still creates the backup da
     const status = await call('project.status', { projectId: seeded.projectId });
     assert.equal(status.ok && status.data.revision, 1);
     await svc.dispose();
+});
+
+// =====================================================================================
+// DSK-004-RP3: the unified host-wide 16-transfer permit shared by uploads, downloads AND
+// pending initializations. The named reds were first run against the archived pre-fix
+// snapshot via DSK_RP3_SERVICE_ENTRY (same technique as the RP2 dispose harness): the
+// pre-fix service already consumed the `objects`/`library`/`randomUUID` constructor DI used
+// here, so a red run exercises the real old behavior — never a new-DI-shaped fake red.
+// Barriers park REAL initialization I/O (store.getObject / store.trustedSubdir) behind gates
+// that are ALWAYS released in finally blocks (bounded, no OOM); peak initialization
+// concurrency is counted, so the accumulation scenario is a real counter, not a synthesized
+// internal number. Where the read-only permit hook is needed but absent on the snapshot,
+// the count assertion is skipped there instead of faking a red — the behavioral assertions
+// carry the case.
+// =====================================================================================
+
+const RP3_DELAY = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+const RP3_SERVICE_ENTRY = process.env.DSK_RP3_SERVICE_ENTRY
+    ? path.resolve(process.env.DSK_RP3_SERVICE_ENTRY)
+    : path.join(repo, 'desktop', 'storage', 'service.cjs');
+const rp3ServicePromise = process.env.DSK_RP3_SERVICE_ENTRY ? buildBundle(RP3_SERVICE_ENTRY) : servicePromise;
+
+let rp3FrameSeq = 0;
+function rp3Frame() {
+    rp3FrameSeq += 1;
+    return { sender: { id: 9000 + rp3FrameSeq }, senderFrame: { url: `director://app/rp3-${rp3FrameSeq}` } };
+}
+
+/** RP3 harness: a REAL object store whose initialization I/O can be parked behind gates and
+ * counted. Both the pre-fix and the fixed service consume exactly this constructor surface. */
+async function makeRp3Service({ label, now, wrapLibrary } = {}) {
+    const contracts = await contractsPromise;
+    const { createStorageService } = await rp3ServicePromise;
+    const { createObjectStore } = await objectsPromise;
+    const root = freshRoot(label ?? 'rp3');
+    const realStore = createObjectStore({ root });
+    const io = {
+        getObjectCalls: 0,      // download initialization I/O starts
+        getObjectEntered: 0,    // concurrently in-flight getObject
+        getObjectMaxEntered: 0, // peak concurrency: the host-budget violation detector
+        trustedSubdirCalls: 0,  // upload initialization I/O starts
+        objectGate: null, releaseObject: null,
+        trustedGate: null, releaseTrusted: null,
+        objectReject: false, lookupReject: false, commitReject: false,
+        callGates: [],          // RP3-R1: FIFO of {promise} — the nth getObject parks behind it
+        arrivals: [],           // RP3-R1: FIFO of signals resolved synchronously at call entry
+    };
+    const store = {
+        ...realStore,
+        async getObject(...args) {
+            io.getObjectCalls += 1;
+            io.getObjectEntered += 1;
+            io.getObjectMaxEntered = Math.max(io.getObjectMaxEntered, io.getObjectEntered);
+            if (io.arrivals.length) io.arrivals.shift()(); // deterministic "entered and parked" signal
+            const callGate = io.callGates.length ? io.callGates.shift() : null;
+            try {
+                if (callGate) await callGate.promise;
+                else if (io.objectGate) await io.objectGate;
+                if (io.objectReject) {
+                    throw Object.assign(Error('[rp3] SIMULATED store.getObject failure injected by the test (not a real OS error)'), { reason: 'io-failure', simulated: true });
+                }
+                return await realStore.getObject(...args);
+            } finally {
+                io.getObjectEntered -= 1;
+            }
+        },
+        async trustedSubdir(...args) {
+            io.trustedSubdirCalls += 1;
+            if (io.trustedGate) await io.trustedGate;
+            return realStore.trustedSubdir(...args);
+        },
+    };
+    const clock = { value: now ?? Date.now() };
+    let library;
+    if (wrapLibrary) {
+        const { openLibrary } = await libraryPromise;
+        const realLibrary = openLibrary({ file: path.join(root, 'library.sqlite'), now: () => clock.value });
+        library = wrapLibrary(realLibrary, io);
+    }
+    const svc = createStorageService({
+        root, objects: store, ...(library ? { library } : {}), dialog: null,
+        verifiers: { document: contracts.assertSceneDocument, canonical: contracts.canonicalJson, manifest: contracts.BackupManifestSchema },
+        now: () => clock.value,
+    });
+    const defaultFrame = rp3Frame();
+    const call = (action, data, frame) => svc.runInRequestContext(frame ?? defaultFrame, () => svc.handlers[action](data));
+    return { svc, call, io, root, clock, defaultFrame };
+}
+
+/** Read-only RP3 hook. Absent on the pre-fix snapshot, where the behavioral red is the
+ * evidence — count assertions are skipped there instead of fabricating a harness failure. */
+function rp3PermitCount(svc) {
+    return svc._internal && typeof svc._internal.hostPermitCount === 'function' ? svc._internal.hostPermitCount() : null;
+}
+function assertPermits(svc, expected, message) {
+    const count = rp3PermitCount(svc);
+    if (count === null) return;
+    assert.equal(count, expected, message);
+}
+
+/** RP3-R1: a per-call, separately releasable real-I/O barrier for getObject entries. */
+function rp3Gate() {
+    let release;
+    const promise = new Promise(resolve => { release = resolve; });
+    return { promise, release };
+}
+/** RP3-R1: deterministic arrival signal — resolves once the NEXT getObject has ENTERED the
+ * wrapper (and taken its per-call gate, i.e. it is parked), so tests never guess timing with
+ * sleeps. Bounded: a refusal that never reaches I/O aborts with a clear diagnostic instead of
+ * hanging. */
+function rp3Arrival(io, label = 'getObject') {
+    let signal;
+    const promise = new Promise(resolve => { signal = resolve; });
+    io.arrivals.push(signal);
+    let timer;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`rp3 arrival barrier not reached: the expected ${label} call never entered the wrapper (bounded abort, no hang)`)), 3000);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** A multi-chunk (3 x 48KiB) valid project document, so non-final vs final chunk behavior is
+ * exercisable at real chunk boundaries. */
+async function rp3MultiChunkDoc(name) {
+    const contracts = await contractsPromise;
+    const document = contracts.readSceneDocument(contracts.demoProject());
+    if (name) document.name = name;
+    for (let index = 0; index < 160; index += 1) {
+        const clone = JSON.parse(JSON.stringify(document.scenes[0].state.entities[4]));
+        clone.id = `rp3-pad-${index}`;
+        clone.name = `填充 ${index}`;
+        document.scenes[0].state.entities.push(clone);
+    }
+    assert.ok(Buffer.from(contracts.canonicalJson(document), 'utf8').length > 2 * 48 * 1024,
+        'the padded document must span at least three real chunks');
+    return document;
+}
+
+/** One seeded project (revision 1, owned by the harness default frame) plus `count`
+ * independent frames/sessions opened on it for downloads. */
+async function rp3SeedHost({ call, count, document } = {}) {
+    const created = await call('project.create', { name: 'RP3宿主' });
+    assert.equal(created.ok, true, JSON.stringify(created.error ?? {}));
+    const commit = await uploadDocument({ call, sessionId: created.data.sessionId }, document ?? await sampleDoc('RP3快照'), {});
+    assert.equal(commit.ok, true, JSON.stringify(commit.error ?? {}));
+    const frames = [], sessionIds = [];
+    for (let index = 0; index < count; index += 1) {
+        const frame = rp3Frame();
+        const opened = await call('project.open', { projectId: created.data.projectId }, frame);
+        assert.equal(opened.ok, true, JSON.stringify(opened.error ?? {}));
+        frames.push(frame);
+        sessionIds.push(opened.data.sessionId);
+    }
+    return { projectId: created.data.projectId, ownerSessionId: created.data.sessionId, revision: commit.data.revision, frames, sessionIds };
+}
+
+async function rp3DrainDownload(call, frame, transferId, maxChunks = 8) {
+    for (let chunkIndex = 0; chunkIndex < maxChunks; chunkIndex += 1) {
+        const chunk = await call('storage.v1.snapshot.download.chunk', { transferId }, frame);
+        assert.equal(chunk.ok, true, JSON.stringify(chunk.error ?? {}));
+        if (chunk.data.final) return chunkIndex + 1;
+    }
+    assert.fail('the download did not reach its final chunk within the bound');
+}
+
+test('RP3 A1 red: 16 cross-frame pending downloads fill the host — the 17th download is refused without starting initialization, non-final chunks keep the permit and the final chunk returns it', async () => {
+    const { svc, call, io } = await makeRp3Service({ label: 'rp3-a1' });
+    try {
+        const host = await rp3SeedHost({ call, count: 16, document: await rp3MultiChunkDoc('RP3多块') });
+        io.objectGate = new Promise(resolve => { io.releaseObject = resolve; });
+        const reads = host.frames.map((frame, index) => call('storage.v1.snapshot.read', { sessionId: host.sessionIds[index] }, frame));
+        await RP3_DELAY(120); // the 16 real getObject initializations are parked on the gate
+        assert.equal(io.getObjectCalls, 16, `the 16 pending initializations must really be in flight, got ${io.getObjectCalls}`);
+        assert.equal(io.getObjectMaxEntered, 16, 'the 16 initializations must have really run concurrently');
+        assert.equal(svc._internal.transfers.size, 16);
+        // The 17th download from a fresh cross-frame session: refused SYNCHRONOUSLY, no I/O.
+        const frame17 = rp3Frame();
+        const opened17 = await call('project.open', { projectId: host.projectId }, frame17);
+        assert.equal(opened17.ok, true);
+        const seventeenth = call('storage.v1.snapshot.read', { sessionId: opened17.data.sessionId }, frame17);
+        await RP3_DELAY(120);
+        assert.equal(io.getObjectCalls, 16, `RED: the pre-fix source admits the 17th download and starts a 17th getObject, got ${io.getObjectCalls}`);
+        assert.equal(svc._internal.transfers.size, 16, 'the refused 17th must not register a transfer');
+        const settled17 = await Promise.race([seventeenth, RP3_DELAY(1000).then(() => 'still-pending')]);
+        assert.notEqual(settled17, 'still-pending', 'the 17th refusal must be synchronous (no initialization parked behind it)');
+        assert.equal(settled17.ok, false, `the 17th download must be refused at a full host: ${JSON.stringify(settled17)}`);
+        assert.equal(settled17.error.message, 'storage.v1/transfer-limit');
+        // Handoff: release the gate; all 16 become READY and keep exactly 16 host slots.
+        io.releaseObject();
+        const results = await Promise.all(reads);
+        assert.equal(results.filter(result => result.ok).length, 16, 'all 16 downloads must become ready');
+        assert.equal(svc._internal.transfers.size, 16, 'ready downloads keep occupying the host');
+        assertPermits(svc, 16, 'pending->ready handoff must keep exactly 16 permits (no double count, no gap)');
+        const again17 = await call('storage.v1.snapshot.read', { sessionId: opened17.data.sessionId }, frame17);
+        assert.equal(again17.ok, false, 'the 17th must still be refused while the 16 are ready');
+        assert.equal(again17.error.message, 'storage.v1/transfer-limit');
+        // A NON-final chunk keeps the slot: the 17th stays refused after chunk #1.
+        const first = await call('storage.v1.snapshot.download.chunk', { transferId: results[0].data.transferId }, host.frames[0]);
+        assert.equal(first.ok, true);
+        assert.equal(first.data.final, false, 'the first chunk of the multi-chunk document must be non-final');
+        const afterNonFinal = await call('storage.v1.snapshot.read', { sessionId: opened17.data.sessionId }, frame17);
+        assert.equal(afterNonFinal.ok, false, 'a non-final chunk must keep the host permit');
+        assert.equal(afterNonFinal.error.message, 'storage.v1/transfer-limit');
+        // Drain frame #1 to its FINAL chunk: its permit returns and the 17th is admitted.
+        // (Chunk #1 was already consumed by the non-final probe above, so 2 remain of the 3.)
+        const drained = await rp3DrainDownload(call, host.frames[0], results[0].data.transferId);
+        assert.equal(drained, 2, 'the remaining two of the three real chunks must drain to the final one');
+        const freed = await call('storage.v1.snapshot.read', { sessionId: opened17.data.sessionId }, frame17);
+        assert.equal(freed.ok, true, `after the final chunk the host must admit the 17th: ${JSON.stringify(freed.error ?? {})}`);
+        assert.equal(io.getObjectCalls, 17, 'the admitted 17th must be the only new initialization');
+        // Bounded cleanup: abort everything so the finally-dispose drains instantly.
+        const abortTargets = [{ frame: frame17, transferId: freed.data.transferId },
+            ...results.slice(1).map((result, index) => ({ frame: host.frames[index + 1], transferId: result.data.transferId }))];
+        const abortResults = await Promise.all(abortTargets.map(target =>
+            call('storage.v1.transfer.abort', { transferId: target.transferId }, target.frame)));
+        assert.equal(abortResults.filter(result => result.ok).length, 16, 'all transfers must abort cleanly');
+        assert.equal(svc._internal.transfers.size, 0);
+        assertPermits(svc, 0, 'aborting every ready download must return every permit');
+    } finally {
+        io.releaseObject?.();
+        await svc.dispose({ timeoutMs: 3000 }); // bounded: sweeps any leftovers of a failed run
+    }
+});
+
+test('RP3 A2 red (mixed): 8 ready uploads plus 8 pending downloads fill the host — the mixed 17th download and the 17th upload are both refused without I/O', async () => {
+    const { svc, call, io } = await makeRp3Service({ label: 'rp3-a2' });
+    try {
+        const host = await rp3SeedHost({ call, count: 16 });
+        // 8 ready uploads on 8 fresh frames/projects.
+        const uploadIds = [], uploadFrames = [];
+        for (let index = 0; index < 8; index += 1) {
+            const frame = rp3Frame();
+            const created = await call('project.create', { name: `RP3上传${index}` }, frame);
+            assert.equal(created.ok, true);
+            const bytes = Buffer.from('rp3 upload payload', 'utf8');
+            const begin = await call('storage.v1.upload.begin', { sessionId: created.data.sessionId, expectedRevision: 0, declaredLength: bytes.length }, frame);
+            assert.equal(begin.ok, true, JSON.stringify(begin.error ?? {}));
+            uploadIds.push(begin.data.transferId);
+            uploadFrames.push(frame);
+        }
+        assert.equal(svc._internal.transfers.size, 8);
+        // 8 pending downloads on the gate.
+        io.objectGate = new Promise(resolve => { io.releaseObject = resolve; });
+        const reads = host.frames.slice(0, 8).map((frame, index) => call('storage.v1.snapshot.read', { sessionId: host.sessionIds[index] }, frame));
+        await RP3_DELAY(120);
+        assert.equal(io.getObjectCalls, 8);
+        assert.equal(svc._internal.transfers.size, 16, '8 ready uploads + 8 pending downloads fill the host');
+        // 17th download: refused without a 9th initialization.
+        const frame17 = rp3Frame();
+        const opened17 = await call('project.open', { projectId: host.projectId }, frame17);
+        const seventeenth = call('storage.v1.snapshot.read', { sessionId: opened17.data.sessionId }, frame17);
+        await RP3_DELAY(120);
+        assert.equal(io.getObjectCalls, 8, `RED: the pre-fix source admits the mixed 17th download, got ${io.getObjectCalls} getObjects`);
+        assert.equal(svc._internal.transfers.size, 16);
+        const settled17 = await Promise.race([seventeenth, RP3_DELAY(1000).then(() => 'still-pending')]);
+        assert.notEqual(settled17, 'still-pending');
+        assert.equal(settled17.ok, false);
+        assert.equal(settled17.error.message, 'storage.v1/transfer-limit');
+        // 17th upload: refused on BOTH sources (the host budget is direction independent).
+        const frame18 = rp3Frame();
+        const created18 = await call('project.create', { name: 'RP3第17上传' }, frame18);
+        const bytes = Buffer.from('payload', 'utf8');
+        const begin17 = await call('storage.v1.upload.begin', { sessionId: created18.data.sessionId, expectedRevision: 0, declaredLength: bytes.length }, frame18);
+        assert.equal(begin17.ok, false, `the 17th upload must be refused at a full host: ${JSON.stringify(begin17)}`);
+        assert.equal(begin17.error.message, 'storage.v1/transfer-limit');
+        assert.equal(io.trustedSubdirCalls, 9, 'the refused 17th upload must not start initialization I/O (1 seed + 8 real uploads did)');
+        // Release + bounded cleanup: abort all 16 and prove the host really freed.
+        io.releaseObject();
+        const results = await Promise.all(reads);
+        assert.equal(results.filter(result => result.ok).length, 8);
+        const aborts = await Promise.all([
+            ...results.map((result, index) => call('storage.v1.transfer.abort', { transferId: result.data.transferId }, host.frames[index])),
+            ...uploadIds.map((transferId, index) => call('storage.v1.transfer.abort', { transferId }, uploadFrames[index])),
+        ]);
+        assert.equal(aborts.filter(result => result.ok).length, 16, 'every mixed-host transfer must abort on its own frame');
+        assert.equal(svc._internal.transfers.size, 0);
+        assertPermits(svc, 0, 'aborting the mixed host must return every permit');
+    } finally {
+        io.releaseObject?.();
+        await svc.dispose({ timeoutMs: 3000 });
+    }
+});
+
+test('RP3 R2 red: 16 real ready uploads fill the host — the 17th download is refused with transfer-limit and getObject is never called', async () => {
+    const { svc, call, io } = await makeRp3Service({ label: 'rp3-r2-16uploads' });
+    try {
+        // One seeded project (its single upload already finished) provides the downloadable snapshot.
+        const host = await rp3SeedHost({ call, count: 0 });
+        // 16 REAL uploads, each on its own frame/project — every initialization completes.
+        const uploadFrames = [], uploadIds = [];
+        for (let index = 0; index < 16; index += 1) {
+            const frame = rp3Frame();
+            const created = await call('project.create', { name: `RP3真实上传${index}` }, frame);
+            assert.equal(created.ok, true);
+            const bytes = Buffer.from(`rp3 real upload ${index}`, 'utf8');
+            const begin = await call('storage.v1.upload.begin', { sessionId: created.data.sessionId, expectedRevision: 0, declaredLength: bytes.length }, frame);
+            assert.equal(begin.ok, true, JSON.stringify(begin.error ?? {}));
+            uploadFrames.push(frame);
+            uploadIds.push(begin.data.transferId);
+        }
+        assert.equal(svc._internal.transfers.size, 16, 'the 16 ready uploads occupy the whole host');
+        assertPermits(svc, 16, 'each ready upload holds exactly one permit');
+        // The 17th transfer is a DOWNLOAD: refused synchronously, initialization never entered.
+        const frame17 = rp3Frame();
+        const opened17 = await call('project.open', { projectId: host.projectId }, frame17);
+        assert.equal(opened17.ok, true);
+        const read17 = call('storage.v1.snapshot.read', { sessionId: opened17.data.sessionId }, frame17);
+        const settled = await Promise.race([read17, RP3_DELAY(1500).then(() => 'still-pending')]);
+        assert.notEqual(settled, 'still-pending', 'the 17th refusal must be synchronous');
+        assert.equal(settled.ok, false, `the 17th download must be refused after 16 real uploads: ${JSON.stringify(settled)}`);
+        assert.equal(settled.error.message, 'storage.v1/transfer-limit');
+        assert.equal(io.getObjectCalls, 0, 'the refused 17th download must not start ANY initialization I/O');
+        assert.equal(svc._internal.transfers.size, 16);
+        // Bounded cleanup: abort all 16 uploads, then the download is admitted.
+        const aborts = await Promise.all(uploadIds.map((transferId, index) =>
+            call('storage.v1.transfer.abort', { transferId }, uploadFrames[index])));
+        assert.equal(aborts.filter(result => result.ok).length, 16);
+        const freed = await call('storage.v1.snapshot.read', { sessionId: opened17.data.sessionId }, frame17);
+        assert.equal(freed.ok, true, `the freed host must admit the download: ${JSON.stringify(freed.error ?? {})}`);
+        await rp3DrainDownload(call, frame17, freed.data.transferId);
+        assertPermits(svc, 0, 'the drained download returned the last permit');
+    } finally {
+        await svc.dispose({ timeoutMs: 3000 });
+    }
+});
+
+test('RP3 A3 red: at 15 occupied slots the same-tick U->D and D->U races for the last slot admit exactly one and the loser never starts I/O', async () => {
+    const { svc, call, io } = await makeRp3Service({ label: 'rp3-a3' });
+    try {
+        const host = await rp3SeedHost({ call, count: 15 });
+        io.objectGate = new Promise(resolve => { io.releaseObject = resolve; });
+        const reads = host.frames.map((frame, index) => call('storage.v1.snapshot.read', { sessionId: host.sessionIds[index] }, frame));
+        await RP3_DELAY(120);
+        assert.equal(io.getObjectCalls, 15);
+        // Competitors for the LAST slot: an upload session and a download session.
+        const uploadFrame = rp3Frame();
+        const createdU = await call('project.create', { name: 'RP3竞U' }, uploadFrame);
+        const bytes = Buffer.from('last slot payload', 'utf8');
+        const downloadFrame = rp3Frame();
+        const openedD = await call('project.open', { projectId: host.projectId }, downloadFrame);
+        assert.equal(openedD.ok, true);
+        // Order 1 (U first): the upload wins the 16th slot; the same-tick download loses.
+        const uploadFirst = call('storage.v1.upload.begin', { sessionId: createdU.data.sessionId, expectedRevision: 0, declaredLength: bytes.length }, uploadFrame);
+        const downloadSecond = call('storage.v1.snapshot.read', { sessionId: openedD.data.sessionId }, downloadFrame);
+        const uploadResult = await Promise.race([uploadFirst, RP3_DELAY(1000).then(() => 'still-pending')]);
+        assert.notEqual(uploadResult, 'still-pending');
+        assert.equal(uploadResult.ok, true, `the first starter must win the last slot: ${JSON.stringify(uploadResult.error ?? {})}`);
+        await RP3_DELAY(120);
+        assert.equal(io.getObjectCalls, 15, `RED: the losing download must not start initialization I/O, got ${io.getObjectCalls}`);
+        assert.equal(svc._internal.transfers.size, 16, 'exactly 16 registrations after the race');
+        const lost = await Promise.race([downloadSecond, RP3_DELAY(1000).then(() => 'still-pending')]);
+        assert.notEqual(lost, 'still-pending', 'the loser must be refused synchronously, not parked behind initialization');
+        assert.equal(lost.ok, false);
+        assert.equal(lost.error.message, 'storage.v1/transfer-limit');
+        // Order 2 (D first): the download wins the 16th slot; the same-tick upload loses.
+        const abortWinner = await call('storage.v1.transfer.abort', { transferId: uploadResult.data.transferId }, uploadFrame);
+        assert.equal(abortWinner.ok, true);
+        const downloadFirst = call('storage.v1.snapshot.read', { sessionId: openedD.data.sessionId }, downloadFrame);
+        const uploadSecond = call('storage.v1.upload.begin', { sessionId: createdU.data.sessionId, expectedRevision: 0, declaredLength: bytes.length }, uploadFrame);
+        await RP3_DELAY(120);
+        assert.equal(io.getObjectCalls, 16, 'the winning download must be the 16th initialization');
+        assert.equal(svc._internal.transfers.size, 16);
+        const uploadLost = await Promise.race([uploadSecond, RP3_DELAY(1000).then(() => 'still-pending')]);
+        assert.notEqual(uploadLost, 'still-pending');
+        assert.equal(uploadLost.ok, false, 'the upload must lose the same-tick race for the last slot');
+        assert.equal(uploadLost.error.message, 'storage.v1/transfer-limit');
+        const downloadWon = await Promise.race([downloadFirst, RP3_DELAY(1000).then(() => 'still-pending')]);
+        assert.equal(downloadWon, 'still-pending', 'the winning download must be genuinely parked mid-initialization (gate still armed), proving it entered real I/O');
+        void downloadWon;
+    } finally {
+        io.releaseObject?.();
+        await svc.dispose({ timeoutMs: 3000 });
+    }
+});
+
+test('RP3 A4 red: aborting a pending download frees map/session at once but the host stays occupied until its initialization settles', async () => {
+    const { svc, call, io } = await makeRp3Service({ label: 'rp3-a4-abort' });
+    try {
+        const host = await rp3SeedHost({ call, count: 16 });
+        io.objectGate = new Promise(resolve => { io.releaseObject = resolve; });
+        const reads = host.frames.map((frame, index) => call('storage.v1.snapshot.read', { sessionId: host.sessionIds[index] }, frame));
+        await RP3_DELAY(120);
+        assert.equal(io.getObjectCalls, 16);
+        const victimIndex = 3;
+        const victim = [...svc._internal.transfers.values()].find(transfer => transfer.sessionId === host.sessionIds[victimIndex]);
+        assert.ok(victim, 'the pending download must be registered');
+        const abort = await call('storage.v1.transfer.abort', { transferId: victim.transferId }, host.frames[victimIndex]);
+        assert.equal(abort.ok, true, JSON.stringify(abort.error ?? {}));
+        assert.equal(svc._internal.transfers.size, 15, 'the cancelled pending download must leave the map immediately');
+        assertPermits(svc, 16, 'the host permit of the cancelled-but-unsettled initialization must stay held');
+        // A replacement on the SAME freed session: refused while the old initialization is parked.
+        const retry = call('storage.v1.snapshot.read', { sessionId: host.sessionIds[victimIndex] }, host.frames[victimIndex]);
+        await RP3_DELAY(120);
+        assert.equal(io.getObjectCalls, 16, `RED: the pre-fix source lets the replacement start I/O through the freed map slot, got ${io.getObjectCalls}`);
+        const settled = await Promise.race([retry, RP3_DELAY(1000).then(() => 'still-pending')]);
+        assert.notEqual(settled, 'still-pending', 'the replacement refusal must be synchronous');
+        assert.equal(settled.ok, false, `the host must still be full while the cancelled initialization is unsettled: ${JSON.stringify(settled)}`);
+        assert.equal(settled.error.message, 'storage.v1/transfer-limit');
+        // Settle: the cancelled initialization resolves, its permit returns, the retry lands.
+        io.releaseObject();
+        const victimResult = await reads[victimIndex];
+        assert.equal(victimResult.ok, false, 'the cancelled download must fail honestly');
+        assert.equal(victimResult.error.message, 'storage.v1/unknown-transfer');
+        const survivors = await Promise.all(reads.filter((_, index) => index !== victimIndex));
+        assert.equal(survivors.filter(result => result.ok).length, 15);
+        const secondTry = await call('storage.v1.snapshot.read', { sessionId: host.sessionIds[victimIndex] }, host.frames[victimIndex]);
+        assert.equal(secondTry.ok, true, `after the cancelled initialization settled the host must admit the replacement: ${JSON.stringify(secondTry.error ?? {})}`);
+        assert.equal(svc._internal.transfers.size, 16);
+        assert.equal(io.getObjectMaxEntered, 16, 'concurrent initialization I/O must never exceed the host budget');
+        const cleanup = await call('storage.v1.transfer.abort', { transferId: secondTry.data.transferId }, host.frames[victimIndex]);
+        assert.equal(cleanup.ok, true);
+    } finally {
+        io.releaseObject?.();
+        await svc.dispose({ timeoutMs: 3000 });
+    }
+});
+
+test('RP3 A4 red: repeated cancel-and-reissue cycles on pending downloads cannot accumulate a 17th initialization even while the map is empty', async () => {
+    const { svc, call, io } = await makeRp3Service({ label: 'rp3-a4-loop' });
+    try {
+        const host = await rp3SeedHost({ call, count: 16 });
+        io.objectGate = new Promise(resolve => { io.releaseObject = resolve; });
+        const firstWave = host.frames.map((frame, index) => call('storage.v1.snapshot.read', { sessionId: host.sessionIds[index] }, frame));
+        await RP3_DELAY(120);
+        assert.equal(io.getObjectCalls, 16);
+        // Cancel every pending initialization: the map empties completely.
+        const pendingIds = [...svc._internal.transfers.values()].map(transfer => transfer.transferId);
+        const aborts = await Promise.all(pendingIds.map((transferId, index) =>
+            call('storage.v1.transfer.abort', { transferId }, host.frames[index])));
+        assert.equal(aborts.filter(result => result.ok).length, 16);
+        assert.equal(svc._internal.transfers.size, 0, 'the cancel loop must empty the transfer map');
+        // Re-issue on the same sessions: the map is empty, but 16 initializations are unsettled.
+        const secondWave = host.frames.map((frame, index) => call('storage.v1.snapshot.read', { sessionId: host.sessionIds[index] }, frame));
+        await RP3_DELAY(120);
+        assert.equal(io.getObjectCalls, 16, `RED: with the map at 0 the pre-fix source starts 16 MORE getObjects (total ${io.getObjectCalls}), accumulating 32 concurrent initializations`);
+        assert.equal(io.getObjectMaxEntered, 16, 'concurrent initialization I/O must never exceed 16');
+        assert.equal(svc._internal.transfers.size, 0, 'the refused re-issues must not register');
+        for (const [index, promise] of secondWave.entries()) {
+            const result = await Promise.race([promise, RP3_DELAY(1000).then(() => 'still-pending')]);
+            assert.notEqual(result, 'still-pending', `wave-2 read ${index} must be refused synchronously`);
+            assert.equal(result.ok, false);
+            assert.equal(result.error.message, 'storage.v1/transfer-limit');
+        }
+        // Settle everything: only now does the host really free up.
+        io.releaseObject();
+        const firstResults = await Promise.all(firstWave);
+        assert.equal(firstResults.filter(result => result.ok).length, 0, 'every cancelled wave-1 download must fail honestly');
+        const freshFrame = rp3Frame();
+        const opened = await call('project.open', { projectId: host.projectId }, freshFrame);
+        const fresh = await call('storage.v1.snapshot.read', { sessionId: opened.data.sessionId }, freshFrame);
+        assert.equal(fresh.ok, true, `a fully settled host must admit a fresh download: ${JSON.stringify(fresh.error ?? {})}`);
+        await call('storage.v1.transfer.abort', { transferId: fresh.data.transferId }, freshFrame);
+    } finally {
+        io.releaseObject?.();
+        await svc.dispose({ timeoutMs: 3000 });
+    }
+});
+
+test('RP3 A4 red: cancelling pending UPLOAD initializations (reload) keeps the host occupied until trustedSubdir settles', async () => {
+    const { svc, call, io, root } = await makeRp3Service({ label: 'rp3-a4-upload' });
+    try {
+        const frames = [], sessionIds = [];
+        for (let index = 0; index < 16; index += 1) {
+            const frame = rp3Frame();
+            const created = await call('project.create', { name: `RP3挂起上传${index}` }, frame);
+            assert.equal(created.ok, true);
+            frames.push(frame);
+            sessionIds.push(created.data.sessionId);
+        }
+        io.trustedGate = new Promise(resolve => { io.releaseTrusted = resolve; });
+        const begins = frames.map((frame, index) => call('storage.v1.upload.begin', { sessionId: sessionIds[index], expectedRevision: 0, declaredLength: 16 }, frame));
+        await RP3_DELAY(120);
+        assert.equal(io.trustedSubdirCalls, 16, 'the 16 upload initializations must really be parked');
+        assert.equal(svc._internal.transfers.size, 16);
+        svc.closeFrameSessions(); // reload: every pending upload is cancelled
+        assert.equal(svc._internal.transfers.size, 0, 'the cancelled pending uploads must leave the map at once');
+        // The host is still occupied by the 16 unsettled initializations.
+        const frame17 = rp3Frame();
+        const created17 = await call('project.create', { name: 'RP3第17上传' }, frame17);
+        const begin17 = call('storage.v1.upload.begin', { sessionId: created17.data.sessionId, expectedRevision: 0, declaredLength: 16 }, frame17);
+        await RP3_DELAY(120);
+        assert.equal(io.trustedSubdirCalls, 16, `RED: the pre-fix source admits a fresh upload while 16 cancelled initializations are still parked, got ${io.trustedSubdirCalls}`);
+        const settled17 = await Promise.race([begin17, RP3_DELAY(1000).then(() => 'still-pending')]);
+        assert.notEqual(settled17, 'still-pending', 'the 17th upload refusal must be synchronous');
+        assert.equal(settled17.ok, false);
+        assert.equal(settled17.error.message, 'storage.v1/transfer-limit');
+        // Settle: every cancelled begin fails honestly, the host frees, the retry lands.
+        io.releaseTrusted();
+        const beginResults = await Promise.all(begins);
+        assert.equal(beginResults.filter(result => result.ok).length, 0, 'every cancelled upload begin must fail honestly');
+        await RP3_DELAY(50); // tmp cleanup settles
+        const uploadsDir = path.join(root, 'uploads');
+        const leftovers = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : [];
+        assert.deepEqual(leftovers, [], 'cancelled pending uploads must not leave .part files');
+        const retry = await call('storage.v1.upload.begin', { sessionId: created17.data.sessionId, expectedRevision: 0, declaredLength: 16 }, frame17);
+        assert.equal(retry.ok, true, `after the initializations settled the host must admit the upload: ${JSON.stringify(retry.error ?? {})}`);
+        await call('storage.v1.transfer.abort', { transferId: retry.data.transferId }, frame17);
+    } finally {
+        io.releaseTrusted?.();
+        await svc.dispose({ timeoutMs: 3000 });
+    }
+});
+
+test('RP3 A4 red: sweeper expiry of pending downloads frees map/session but keeps the host occupied until the reads settle', async () => {
+    const { svc, call, io, clock } = await makeRp3Service({ label: 'rp3-a4-sweep', now: 1000000 });
+    try {
+        const host = await rp3SeedHost({ call, count: 16 });
+        io.objectGate = new Promise(resolve => { io.releaseObject = resolve; });
+        const firstWave = host.frames.map((frame, index) => call('storage.v1.snapshot.read', { sessionId: host.sessionIds[index] }, frame));
+        await RP3_DELAY(120);
+        assert.equal(io.getObjectCalls, 16);
+        clock.value += 61000; // idle beyond the 60s budget, by the injected business clock
+        svc._internal.sweepTransfers();
+        assert.equal(svc._internal.transfers.size, 0, 'the expired pending downloads must leave the map at once');
+        const secondWave = host.frames.map((frame, index) => call('storage.v1.snapshot.read', { sessionId: host.sessionIds[index] }, frame));
+        await RP3_DELAY(120);
+        assert.equal(io.getObjectCalls, 16, `RED: the pre-fix source re-admits all 16 sessions onto the still-parked initializations, got ${io.getObjectCalls}`);
+        assert.equal(io.getObjectMaxEntered, 16, 'concurrent initialization I/O must never exceed 16');
+        for (const [index, promise] of secondWave.entries()) {
+            const result = await Promise.race([promise, RP3_DELAY(1000).then(() => 'still-pending')]);
+            assert.notEqual(result, 'still-pending', `wave-2 read ${index} must be refused synchronously`);
+            assert.equal(result.ok, false);
+            assert.equal(result.error.message, 'storage.v1/transfer-limit');
+        }
+        io.releaseObject();
+        const firstResults = await Promise.all(firstWave);
+        assert.equal(firstResults.filter(result => result.ok).length, 0, 'every expired download must fail honestly');
+        const freshFrame = rp3Frame();
+        const opened = await call('project.open', { projectId: host.projectId }, freshFrame);
+        const fresh = await call('storage.v1.snapshot.read', { sessionId: opened.data.sessionId }, freshFrame);
+        assert.equal(fresh.ok, true, 'after the expired initializations settled the host must admit a fresh read');
+        await call('storage.v1.transfer.abort', { transferId: fresh.data.transferId }, freshFrame);
+    } finally {
+        io.releaseObject?.();
+        await svc.dispose({ timeoutMs: 3000 });
+    }
+});
+
+test('RP3 A5: a late resolve/reject of a cancelled download fails honestly, never revives, releases exactly once and a same-session replacement is undisturbed', async () => {
+    // Late resolve: the bytes arrive after the cancel.
+    {
+        const { svc, call, io } = await makeRp3Service({ label: 'rp3-a5-resolve' });
+        try {
+            const host = await rp3SeedHost({ call, count: 1 });
+            io.objectGate = new Promise(resolve => { io.releaseObject = resolve; });
+            const read = call('storage.v1.snapshot.read', { sessionId: host.sessionIds[0] }, host.frames[0]);
+            await RP3_DELAY(80);
+            assert.equal(io.getObjectCalls, 1);
+            const victim = [...svc._internal.transfers.values()][0];
+            const abort = await call('storage.v1.transfer.abort', { transferId: victim.transferId }, host.frames[0]);
+            assert.equal(abort.ok, true);
+            assert.equal(svc._internal.transfers.size, 0);
+            io.releaseObject(); // the bytes arrive LATE
+            const result = await read;
+            assert.equal(result.ok, false, 'a late resolve must not resurrect the cancelled download');
+            assert.equal(result.error.message, 'storage.v1/unknown-transfer');
+            assert.equal(svc._internal.transfers.size, 0);
+            assertPermits(svc, 0, 'the late settle must release its permit exactly once');
+            const replacement = await call('storage.v1.snapshot.read', { sessionId: host.sessionIds[0] }, host.frames[0]);
+            assert.equal(replacement.ok, true, 'the same session must admit its replacement');
+            await rp3DrainDownload(call, host.frames[0], replacement.data.transferId);
+            assert.equal(svc._internal.transfers.size, 0);
+            assertPermits(svc, 0, 'the replacement holds its permit only until its final chunk');
+        } finally {
+            io.releaseObject?.();
+            await svc.dispose({ timeoutMs: 3000 });
+        }
+    }
+    // Late reject: the initialization REJECTS after the cancel.
+    {
+        const { svc, call, io } = await makeRp3Service({ label: 'rp3-a5-reject' });
+        try {
+            const host = await rp3SeedHost({ call, count: 1 });
+            io.objectGate = new Promise(resolve => { io.releaseObject = resolve; });
+            io.objectReject = true;
+            const read = call('storage.v1.snapshot.read', { sessionId: host.sessionIds[0] }, host.frames[0]);
+            await RP3_DELAY(80);
+            const victim = [...svc._internal.transfers.values()][0];
+            await call('storage.v1.transfer.abort', { transferId: victim.transferId }, host.frames[0]);
+            io.releaseObject();
+            const result = await read;
+            assert.equal(result.ok, false, 'a late rejection must fail the cancelled download honestly');
+            assert.equal(result.error.message, 'storage.v1/io-failure');
+            assert.equal(svc._internal.transfers.size, 0);
+            assertPermits(svc, 0, 'a late rejection releases its permit exactly once');
+            io.objectReject = false; // the fault was for the cancelled read only
+            const replacement = await call('storage.v1.snapshot.read', { sessionId: host.sessionIds[0] }, host.frames[0]);
+            assert.equal(replacement.ok, true, 'the session must admit a replacement after the late rejection');
+            await rp3DrainDownload(call, host.frames[0], replacement.data.transferId);
+        } finally {
+            io.releaseObject?.();
+            await svc.dispose({ timeoutMs: 3000 });
+        }
+    }
+});
+
+test('RP3 R1: a cancelled download whose initialization resolves LATE cannot touch the same-session replacement already registered (map object, session slot, permit) which really completes', async () => {
+    const { svc, call, io } = await makeRp3Service({ label: 'rp3-r1-resolve' });
+    const gateA = rp3Gate(), gateB = rp3Gate();
+    try {
+        const host = await rp3SeedHost({ call, count: 1 });
+        const frame = host.frames[0], sessionId = host.sessionIds[0];
+        io.callGates = [gateA, gateB];
+        // OLD download parks on gateA; then it is cancelled while STILL unsettled.
+        const arrivedA = rp3Arrival(io, 'old download');
+        const readA = call('storage.v1.snapshot.read', { sessionId }, frame);
+        await arrivedA;
+        const oldTransfer = [...svc._internal.transfers.values()].find(transfer => transfer.sessionId === sessionId);
+        assert.ok(oldTransfer, 'the old download must be registered');
+        const abortA = await call('storage.v1.transfer.abort', { transferId: oldTransfer.transferId }, frame);
+        assert.equal(abortA.ok, true);
+        assert.equal(svc._internal.transfers.size, 0, 'the cancelled old download leaves the map at once');
+        // The REPLACEMENT registers on the same session while the OLD initialization is parked.
+        const arrivedB = rp3Arrival(io, 'replacement download');
+        const readB = call('storage.v1.snapshot.read', { sessionId }, frame);
+        await arrivedB;
+        const entries = [...svc._internal.transfers.values()];
+        assert.equal(entries.length, 1, 'exactly the replacement is registered');
+        const replacement = entries[0];
+        const newId = replacement.transferId;
+        assert.notEqual(newId, oldTransfer.transferId, 'the replacement must have its own identity');
+        assert.equal(svc._internal.sessions.get(sessionId).downloadTransferId, newId, 'the session slot belongs to the replacement');
+        assertPermits(svc, 2, 'the unsettled cancelled initialization and the replacement hold exactly two permits');
+        // The OLD initialization resolves LATE (replacement still parked on gateB).
+        gateA.release();
+        const oldResult = await Promise.race([readA, RP3_DELAY(1500).then(() => 'still-pending')]);
+        assert.notEqual(oldResult, 'still-pending');
+        assert.equal(oldResult.ok, false, 'the late-resolved old download must fail honestly');
+        assert.equal(oldResult.error.message, 'storage.v1/unknown-transfer');
+        assert.ok(svc._internal.transfers.get(newId) === replacement, 'the late settle must not re-register or replace the replacement map OBJECT');
+        assert.equal(svc._internal.sessions.get(sessionId).downloadTransferId, newId, 'the session slot must survive the late settle');
+        assertPermits(svc, 1, 'the late settle released exactly its OWN permit, not the replacement\'s');
+        // The replacement really completes.
+        gateB.release();
+        const newResult = await readB;
+        assert.equal(newResult.ok, true, JSON.stringify(newResult.error ?? {}));
+        await rp3DrainDownload(call, frame, newId);
+        assert.equal(svc._internal.transfers.size, 0);
+        assertPermits(svc, 0, 'the completed replacement returned its permit');
+    } finally {
+        gateA.release();
+        gateB.release();
+        await svc.dispose({ timeoutMs: 3000 });
+    }
+});
+
+test('RP3 R1: a cancelled download whose initialization REJECTS LATE cannot touch the same-session replacement already registered which really completes', async () => {
+    const { svc, call, io } = await makeRp3Service({ label: 'rp3-r1-reject' });
+    const gateA = rp3Gate(), gateB = rp3Gate();
+    try {
+        const host = await rp3SeedHost({ call, count: 1 });
+        const frame = host.frames[0], sessionId = host.sessionIds[0];
+        io.callGates = [gateA, gateB];
+        const arrivedA = rp3Arrival(io, 'old download');
+        const readA = call('storage.v1.snapshot.read', { sessionId }, frame);
+        await arrivedA;
+        const oldTransfer = [...svc._internal.transfers.values()].find(transfer => transfer.sessionId === sessionId);
+        const abortA = await call('storage.v1.transfer.abort', { transferId: oldTransfer.transferId }, frame);
+        assert.equal(abortA.ok, true);
+        const arrivedB = rp3Arrival(io, 'replacement download');
+        const readB = call('storage.v1.snapshot.read', { sessionId }, frame);
+        await arrivedB;
+        const replacement = [...svc._internal.transfers.values()][0];
+        const newId = replacement.transferId;
+        assert.equal(svc._internal.sessions.get(sessionId).downloadTransferId, newId);
+        assertPermits(svc, 2, 'both unsettled initializations hold their permits');
+        // The OLD initialization REJECTS late; the replacement stays parked and untouched.
+        io.objectReject = true;
+        gateA.release();
+        const oldResult = await Promise.race([readA, RP3_DELAY(1500).then(() => 'still-pending')]);
+        assert.notEqual(oldResult, 'still-pending');
+        assert.equal(oldResult.ok, false, 'the late-rejecting old download must fail honestly');
+        assert.equal(oldResult.error.message, 'storage.v1/io-failure');
+        io.objectReject = false; // the fault was the old call only
+        assert.ok(svc._internal.transfers.get(newId) === replacement, 'the late rejection must not disturb the replacement map object');
+        assert.equal(svc._internal.sessions.get(sessionId).downloadTransferId, newId);
+        assertPermits(svc, 1, 'the late rejection released exactly its own permit');
+        gateB.release();
+        const newResult = await readB;
+        assert.equal(newResult.ok, true, JSON.stringify(newResult.error ?? {}));
+        await rp3DrainDownload(call, frame, newId);
+        assertPermits(svc, 0);
+    } finally {
+        io.objectReject = false;
+        gateA.release();
+        gateB.release();
+        await svc.dispose({ timeoutMs: 3000 });
+    }
+});
+
+test('RP3 R1: after a reload the OLD generation read settling LATE cannot touch the NEW generation replacement which really completes', async () => {
+    const { svc, call, io } = await makeRp3Service({ label: 'rp3-r1-reload' });
+    const gateA = rp3Gate(), gateB = rp3Gate();
+    try {
+        const host = await rp3SeedHost({ call, count: 1 });
+        io.callGates = [gateA, gateB];
+        const generationBefore = svc._internal.frameGeneration();
+        const arrivedA = rp3Arrival(io, 'old-generation download');
+        const readA = call('storage.v1.snapshot.read', { sessionId: host.sessionIds[0] }, host.frames[0]);
+        await arrivedA;
+        const oldTransfer = [...svc._internal.transfers.values()][0];
+        // Reload: generation advances synchronously, the old read is cancelled (permit retained).
+        svc.closeFrameSessions();
+        assert.ok(svc._internal.frameGeneration() > generationBefore, 'the reload must advance the frame generation');
+        assert.equal(svc._internal.transfers.size, 0);
+        // NEW generation: a fresh frame opens the project and registers its own download.
+        const frame2 = rp3Frame();
+        const opened2 = await call('project.open', { projectId: host.projectId }, frame2);
+        assert.equal(opened2.ok, true);
+        const arrivedB = rp3Arrival(io, 'new-generation download');
+        const readB = call('storage.v1.snapshot.read', { sessionId: opened2.data.sessionId }, frame2);
+        await arrivedB;
+        const replacement = [...svc._internal.transfers.values()][0];
+        const newId = replacement.transferId;
+        assert.notEqual(newId, oldTransfer.transferId);
+        assert.equal(svc._internal.sessions.get(opened2.data.sessionId).downloadTransferId, newId);
+        assertPermits(svc, 2, 'the cancelled old-generation initialization and the new-generation download hold exactly two permits');
+        // The OLD generation initialization settles LATE.
+        gateA.release();
+        const oldResult = await Promise.race([readA, RP3_DELAY(1500).then(() => 'still-pending')]);
+        assert.notEqual(oldResult, 'still-pending');
+        assert.equal(oldResult.ok, false, 'the old-generation read must fail honestly');
+        assert.equal(oldResult.error.message, 'storage.v1/unknown-transfer');
+        assert.ok(svc._internal.transfers.get(newId) === replacement, 'the old-generation settle must not disturb the new-generation map object');
+        assert.equal(svc._internal.sessions.get(opened2.data.sessionId).downloadTransferId, newId);
+        assertPermits(svc, 1, 'the old-generation settle released exactly its own permit');
+        // The NEW generation download really completes.
+        gateB.release();
+        const newResult = await readB;
+        assert.equal(newResult.ok, true, JSON.stringify(newResult.error ?? {}));
+        await rp3DrainDownload(call, frame2, newId);
+        assertPermits(svc, 0);
+    } finally {
+        gateA.release();
+        gateB.release();
+        await svc.dispose({ timeoutMs: 3000 });
+    }
+});
+
+test('RP3 R1: a cancelled cross-frame download settling LATE cannot touch another frame\'s live download (slot, permit) which really completes', async () => {
+    const { svc, call, io } = await makeRp3Service({ label: 'rp3-r1-crossframe' });
+    const gateA = rp3Gate(), gateB = rp3Gate();
+    try {
+        const host = await rp3SeedHost({ call, count: 2 });
+        const frameA = host.frames[0], sessionA = host.sessionIds[0];
+        const frameB = host.frames[1], sessionB = host.sessionIds[1];
+        io.callGates = [gateA, gateB];
+        const arrivedA = rp3Arrival(io, 'cancelled-frame download');
+        const readA = call('storage.v1.snapshot.read', { sessionId: sessionA }, frameA);
+        await arrivedA;
+        const oldTransfer = [...svc._internal.transfers.values()].find(transfer => transfer.sessionId === sessionA);
+        const abortA = await call('storage.v1.transfer.abort', { transferId: oldTransfer.transferId }, frameA);
+        assert.equal(abortA.ok, true);
+        const arrivedB = rp3Arrival(io, 'other-frame download');
+        const readB = call('storage.v1.snapshot.read', { sessionId: sessionB }, frameB);
+        await arrivedB;
+        const replacement = [...svc._internal.transfers.values()].find(transfer => transfer.sessionId === sessionB);
+        const newId = replacement.transferId;
+        assert.equal(svc._internal.sessions.get(sessionB).downloadTransferId, newId);
+        assertPermits(svc, 2, 'the cancelled cross-frame initialization and the live download hold exactly two permits');
+        gateA.release();
+        const oldResult = await Promise.race([readA, RP3_DELAY(1500).then(() => 'still-pending')]);
+        assert.notEqual(oldResult, 'still-pending');
+        assert.equal(oldResult.ok, false);
+        assert.equal(oldResult.error.message, 'storage.v1/unknown-transfer');
+        assert.ok(svc._internal.transfers.get(newId) === replacement, 'the cross-frame late settle must not disturb the live download');
+        assert.equal(svc._internal.sessions.get(sessionB).downloadTransferId, newId, 'the other frame\'s session slot must survive');
+        assertPermits(svc, 1, 'the late settle released only its own permit');
+        gateB.release();
+        const newResult = await readB;
+        assert.equal(newResult.ok, true, JSON.stringify(newResult.error ?? {}));
+        await rp3DrainDownload(call, frameB, newId);
+        assertPermits(svc, 0);
+    } finally {
+        gateA.release();
+        gateB.release();
+        await svc.dispose({ timeoutMs: 3000 });
+    }
+});
+
+test('RP3 A6: upload initialization failures release the permit — trusted dir refused and a real open collision', async () => {
+    // (a) the uploads path is a FILE: trustedSubdir refuses the whole initialization.
+    {
+        const { svc, call, io, root } = await makeRp3Service({ label: 'rp3-a6-trusted' });
+        void io;
+        try {
+            const frame = rp3Frame();
+            const created = await call('project.create', { name: 'RP3目录失败' }, frame);
+            fs.writeFileSync(path.join(root, 'uploads'), 'not a directory');
+            const bytes = Buffer.from('payload', 'utf8');
+            const begin = await call('storage.v1.upload.begin', { sessionId: created.data.sessionId, expectedRevision: 0, declaredLength: bytes.length }, frame);
+            assert.equal(begin.ok, false, `the refused trusted dir must fail the begin: ${JSON.stringify(begin)}`);
+            assert.equal(svc._internal.transfers.size, 0);
+            assertPermits(svc, 0, 'a failed initialization must release its permit');
+            fs.rmSync(path.join(root, 'uploads'), { force: true }); // remove the fault
+            const retry = await call('storage.v1.upload.begin', { sessionId: created.data.sessionId, expectedRevision: 0, declaredLength: bytes.length }, frame);
+            assert.equal(retry.ok, true, 'with the fault removed the same session must admit a fresh upload');
+            await call('storage.v1.transfer.abort', { transferId: retry.data.transferId }, frame);
+        } finally {
+            await svc.dispose({ timeoutMs: 3000 });
+        }
+    }
+    // (b) a real 'wx' collision: the deterministic transfer id already exists on disk.
+    {
+        const contracts = await contractsPromise;
+        const { createStorageService } = await rp3ServicePromise;
+        const root = freshRoot('rp3-a6-open');
+        const knownId = 'rp3-known-transfer-id';
+        const preset = [undefined, undefined, knownId]; // call 1: projectId, 2: sessionId, 3: transferId
+        const svc = createStorageService({
+            root, dialog: null,
+            verifiers: { document: contracts.assertSceneDocument, canonical: contracts.canonicalJson, manifest: contracts.BackupManifestSchema },
+            randomUUID: () => { const value = preset.shift(); return value || crypto.randomUUID(); },
+        });
+        const frame = rp3Frame();
+        const call = (action, data) => svc.runInRequestContext(frame, () => svc.handlers[action](data));
+        try {
+            const created = await call('project.create', { name: 'RP3打开失败' });
+            fs.mkdirSync(path.join(root, 'uploads'), { recursive: true });
+            fs.writeFileSync(path.join(root, 'uploads', `${knownId}.part`), 'collision');
+            const bytes = Buffer.from('payload', 'utf8');
+            const begin = await call('storage.v1.upload.begin', { sessionId: created.data.sessionId, expectedRevision: 0, declaredLength: bytes.length });
+            assert.equal(begin.ok, false, `the real open collision must fail the begin: ${JSON.stringify(begin)}`);
+            assert.equal(svc._internal.transfers.size, 0);
+            assertPermits(svc, 0, 'a failed open must release its permit');
+            fs.rmSync(path.join(root, 'uploads', `${knownId}.part`), { force: true });
+            const retry = await call('storage.v1.upload.begin', { sessionId: created.data.sessionId, expectedRevision: 0, declaredLength: bytes.length });
+            assert.equal(retry.ok, true, 'with the collision removed the same session must admit a fresh upload');
+            await call('storage.v1.transfer.abort', { transferId: retry.data.transferId });
+        } finally {
+            await svc.dispose({ timeoutMs: 3000 });
+        }
+    }
+});
+
+test('RP3 A6: download initialization failures release the permit — unknown snapshot, thrown lookup and a failed object read', async () => {
+    const { svc, call, io } = await makeRp3Service({
+        label: 'rp3-a6-download',
+        wrapLibrary: (realLibrary, ioLocal) => ({
+            ...realLibrary,
+            getSnapshot(...args) {
+                if (ioLocal.lookupReject) {
+                    throw Object.assign(Error('[rp3] SIMULATED snapshot lookup failure injected by the test'), { reason: 'io-failure', simulated: true });
+                }
+                return realLibrary.getSnapshot(...args);
+            },
+        }),
+    });
+    try {
+        const created = await call('project.create', { name: 'RP3查找失败' });
+        const commit = await uploadDocument({ call, sessionId: created.data.sessionId }, await sampleDoc('RP3查找'), {});
+        assert.equal(commit.ok, true, JSON.stringify(commit.error ?? {}));
+        const sessionId = created.data.sessionId;
+        // (a) unknown explicit snapshot id.
+        const unknown = await call('storage.v1.snapshot.read', { sessionId, snapshotId: 'snap-rp3-nope' });
+        assert.equal(unknown.ok, false);
+        assert.equal(unknown.error.message, 'storage.v1/unknown-snapshot');
+        assert.equal(svc._internal.transfers.size, 0);
+        assertPermits(svc, 0, 'an unknown snapshot must release the permit');
+        // (b) thrown lookup.
+        io.lookupReject = true;
+        const thrown = await call('storage.v1.snapshot.read', { sessionId });
+        assert.equal(thrown.ok, false);
+        assert.equal(thrown.error.message, 'storage.v1/io-failure');
+        io.lookupReject = false;
+        assert.equal(svc._internal.transfers.size, 0);
+        assertPermits(svc, 0, 'a thrown lookup must release the permit');
+        // (c) failed object read (simulated after the real gate).
+        io.objectGate = new Promise(resolve => { io.releaseObject = resolve; });
+        io.objectReject = true;
+        const read = call('storage.v1.snapshot.read', { sessionId });
+        await RP3_DELAY(80);
+        assert.equal(io.getObjectCalls, 1, 'the read initialization must really be parked');
+        io.releaseObject();
+        const result = await read;
+        assert.equal(result.ok, false);
+        assert.equal(result.error.message, 'storage.v1/io-failure');
+        assert.equal(svc._internal.transfers.size, 0);
+        assertPermits(svc, 0, 'a failed read must release the permit');
+        io.objectReject = false; // the fault was for the parked read only
+        const after = await call('storage.v1.snapshot.read', { sessionId });
+        assert.equal(after.ok, true, 'the session must admit a fresh read after the failure');
+        let final = false;
+        while (!final) {
+            const chunk = await call('storage.v1.snapshot.download.chunk', { transferId: after.data.transferId });
+            assert.equal(chunk.ok, true, JSON.stringify(chunk.error ?? {}));
+            final = chunk.data.final;
+        }
+    } finally {
+        io.releaseObject?.();
+        await svc.dispose({ timeoutMs: 3000 });
+    }
+});
+
+test('RP3 A6: ready-phase terminal paths release exactly once — final chunk, commit success, commit failure, ready abort and reload', async () => {
+    const { svc, call } = await makeRp3Service({ label: 'rp3-a6-ready' });
+    try {
+        const host = await rp3SeedHost({ call, count: 1 });
+        // (a) a fully drained download releases at its final chunk.
+        const read = await call('storage.v1.snapshot.read', { sessionId: host.sessionIds[0] }, host.frames[0]);
+        assert.equal(read.ok, true, JSON.stringify(read.error ?? {}));
+        await rp3DrainDownload(call, host.frames[0], read.data.transferId);
+        assert.equal(svc._internal.transfers.size, 0);
+        assertPermits(svc, 0, 'a fully drained download must have returned its permit');
+        // (b) a successful commit releases.
+        const committed = await uploadDocument({ call, sessionId: host.ownerSessionId }, await sampleDoc('RP3提交成功'), { expectedRevision: host.revision });
+        assert.equal(committed.ok, true, JSON.stringify(committed.error ?? {}));
+        assert.equal(svc._internal.transfers.size, 0);
+        assertPermits(svc, 0, 'a successful commit must release the permit');
+        // (c) a failing commit (bad JSON) cancels and releases.
+        const bytes = Buffer.from('{not json', 'utf8');
+        const begin = await call('storage.v1.upload.begin', { sessionId: host.ownerSessionId, expectedRevision: committed.data.revision, declaredLength: bytes.length });
+        assert.equal(begin.ok, true, JSON.stringify(begin.error ?? {}));
+        const chunk = await call('storage.v1.upload.chunk', { transferId: begin.data.transferId, offset: 0, data: bytes.toString('base64') });
+        assert.equal(chunk.ok, true);
+        const failed = await call('storage.v1.upload.commit', { transferId: begin.data.transferId });
+        assert.equal(failed.ok, false);
+        assert.equal(failed.error.message, 'storage.v1/upload-format', 'invalid JSON is refused with the frozen upload-format reason');
+        assert.equal(svc._internal.transfers.size, 0);
+        assertPermits(svc, 0, 'a cancelled failing commit must release the permit');
+        // (d) a ready upload cancelled by abort releases.
+        const begin2 = await call('storage.v1.upload.begin', { sessionId: host.ownerSessionId, expectedRevision: committed.data.revision, declaredLength: 4 });
+        assert.equal(begin2.ok, true);
+        const abort = await call('storage.v1.transfer.abort', { transferId: begin2.data.transferId });
+        assert.equal(abort.ok, true);
+        assertPermits(svc, 0, 'an aborted ready upload must release the permit');
+        // (e) a ready upload cancelled by reload releases.
+        const begin3 = await call('storage.v1.upload.begin', { sessionId: host.ownerSessionId, expectedRevision: committed.data.revision, declaredLength: 4 });
+        assert.equal(begin3.ok, true);
+        svc.closeFrameSessions();
+        assert.equal(svc._internal.transfers.size, 0);
+        assertPermits(svc, 0, 'a reload-cancelled ready upload must release the permit');
+    } finally {
+        await svc.dispose({ timeoutMs: 3000 });
+    }
+});
+
+test('RP3 A7 red: a sender destroyed without any close event is cancelled idempotently when the read settles and never leaks the host', async () => {
+    const { svc, call, io } = await makeRp3Service({ label: 'rp3-a7-destroyed' });
+    try {
+        const host = await rp3SeedHost({ call, count: 1 });
+        io.objectGate = new Promise(resolve => { io.releaseObject = resolve; });
+        const read = call('storage.v1.snapshot.read', { sessionId: host.sessionIds[0] }, host.frames[0]);
+        await RP3_DELAY(80);
+        assert.equal(io.getObjectCalls, 1);
+        host.frames[0].sender.isDestroyed = () => true; // destroyed WITHOUT any close event
+        io.releaseObject();
+        const result = await read;
+        assert.equal(result.ok, false, 'the destroyed-sender read must fail honestly');
+        assert.equal(svc._internal.transfers.size, 0, `RED: the pre-fix source leaves the zombie transfer in the map, got ${svc._internal.transfers.size}`);
+        assertPermits(svc, 0, 'the destroyed-sender settle must release the permit idempotently');
+        // The host really freed: a download from ANOTHER live frame is admitted and completes.
+        const other = rp3Frame();
+        const opened = await call('project.open', { projectId: host.projectId }, other);
+        const fresh = await call('storage.v1.snapshot.read', { sessionId: opened.data.sessionId }, other);
+        assert.equal(fresh.ok, true, `the destroyed frame must not leak the host: ${JSON.stringify(fresh.error ?? {})}`);
+        await rp3DrainDownload(call, other, fresh.data.transferId);
+        assert.equal(svc._internal.transfers.size, 0);
+    } finally {
+        io.releaseObject?.();
+        await svc.dispose({ timeoutMs: 3000 });
+    }
+});
+
+test('RP3 A8: per-frame direction limits and session exclusivity stay unchanged under the unified permit', async () => {
+    const { svc, call } = await makeRp3Service({ label: 'rp3-a8' });
+    try {
+        const host = await rp3SeedHost({ call, count: 1 });
+        const bytes = Buffer.from('payload', 'utf8');
+        const begin = await call('storage.v1.upload.begin', { sessionId: host.ownerSessionId, expectedRevision: host.revision, declaredLength: bytes.length });
+        assert.equal(begin.ok, true);
+        // Session exclusivity: the active upload blocks both directions on its own session.
+        const sameUpload = await call('storage.v1.upload.begin', { sessionId: host.ownerSessionId, expectedRevision: 0, declaredLength: bytes.length });
+        assert.equal(sameUpload.ok, false);
+        assert.equal(sameUpload.error.message, 'storage.v1/transfer-limit');
+        const sameDownload = await call('storage.v1.snapshot.read', { sessionId: host.ownerSessionId });
+        assert.equal(sameDownload.ok, false);
+        assert.equal(sameDownload.error.message, 'storage.v1/transfer-limit');
+        // Frame direction limit: a second session on the SAME frame cannot upload.
+        const secondSession = await call('project.create', { name: 'RP3同帧' });
+        const secondUpload = await call('storage.v1.upload.begin', { sessionId: secondSession.data.sessionId, expectedRevision: 0, declaredLength: bytes.length });
+        assert.equal(secondUpload.ok, false);
+        assert.equal(secondUpload.error.message, 'storage.v1/transfer-limit');
+        // An independent frame keeps its own budget and succeeds.
+        const read = await call('storage.v1.snapshot.read', { sessionId: host.sessionIds[0] }, host.frames[0]);
+        assert.equal(read.ok, true, 'an independent frame keeps its own direction budget');
+        await rp3DrainDownload(call, host.frames[0], read.data.transferId);
+        const abort = await call('storage.v1.transfer.abort', { transferId: begin.data.transferId });
+        assert.equal(abort.ok, true);
+        assertPermits(svc, 0, 'the cleanup must leave an empty host');
+    } finally {
+        await svc.dispose({ timeoutMs: 3000 });
+    }
+});
+
+test('RP3 R3: an upload cancelled while its real fsp.open is in flight keeps the host occupied until the open settles — the late handle is really closed and the begin never succeeds', async () => {
+    const contracts = await contractsPromise;
+    // NOTE: the gated build must honor DSK_RP3_SERVICE_ENTRY so a snapshot red run exercises
+    // the OLD source (the plain 'desktop/storage/service.cjs' default would silently bundle
+    // the working tree even in a red run — probe-corroborated: the old source admits the 17th
+    // upload at map 15 because its host check never counts cancelled-but-unsettled opens).
+    const { createStorageService } = await buildGatedService(RP3_SERVICE_ENTRY);
+    const gates = globalThis.__rp1FspGates;
+    const root = freshRoot('rp3-r3-open');
+    const svc = createStorageService({
+        root, dialog: null,
+        verifiers: { document: contracts.assertSceneDocument, canonical: contracts.canonicalJson, manifest: contracts.BackupManifestSchema },
+    });
+    const defaultFrame = rp3Frame();
+    const call = (action, data, frame) => svc.runInRequestContext(frame ?? defaultFrame, () => svc.handlers[action](data));
+    try {
+        // 16 projects/sessions on 16 frames: frame[0] hosts the parked upload, the rest fill
+        // the host with READY uploads so the host-occupancy of the unsettled open is observable
+        // through real admission (16th permit) instead of internal numbers.
+        const frames = [], created = [];
+        for (let index = 0; index < 16; index += 1) {
+            const frame = rp3Frame();
+            const result = await call('project.create', { name: `RP3open${index}` }, frame);
+            assert.equal(result.ok, true);
+            frames.push(frame);
+            created.push(result.data);
+        }
+        // Arm BEFORE begin: the FIRST .part open parks before the real open; every .part
+        // handle is proxied so real closes are counted (the delta isolates the late one).
+        gates.openMatch = target => typeof target === 'string' && target.endsWith('.part');
+        gates.openMatched = false;
+        gates.openGate = new Promise(resolve => { gates.releaseOpen = resolve; });
+        gates.openProxyMatch = target => typeof target === 'string' && target.endsWith('.part');
+        gates.handleCloses = 0;
+        const bytes = Buffer.from('x', 'utf8');
+        const begin = call('storage.v1.upload.begin', { sessionId: created[0].sessionId, expectedRevision: 0, declaredLength: bytes.length }, frames[0]);
+        for (let waited = 0; waited < 2000 && !gates.openMatched; waited += 5) await RP3_DELAY(5);
+        assert.ok(gates.openMatched, 'the real fsp.open barrier must be reached');
+        const parkedId = [...svc._internal.transfers.values()].find(transfer => transfer.sessionId === created[0].sessionId).transferId;
+        // 15 more READY uploads complete while the first one is parked mid-open.
+        for (let index = 1; index < 16; index += 1) {
+            const other = await call('storage.v1.upload.begin', { sessionId: created[index].sessionId, expectedRevision: 0, declaredLength: bytes.length }, frames[index]);
+            assert.equal(other.ok, true, JSON.stringify(other.error ?? {}));
+        }
+        assert.equal(svc._internal.transfers.size, 16, 'the parked initialization plus 15 ready uploads fill the host');
+        assertPermits(svc, 16, 'the parked open-in-flight upload and the 15 ready uploads hold all 16 permits');
+        // Cancel ONLY the parked session while its open is in flight: map/session free at once.
+        const closeOnly = await call('storage.v1.project.close', { sessionId: created[0].sessionId }, frames[0]);
+        assert.equal(closeOnly.ok, true);
+        assert.equal(svc._internal.transfers.size, 15, 'the cancelled upload must leave the map immediately');
+        assertPermits(svc, 16, 'the cancelled-but-unsettled open keeps the host FULL');
+        // A fresh upload is refused synchronously while the open is unsettled.
+        const frame17 = rp3Frame();
+        const created17 = await call('project.create', { name: 'RP3open第17' }, frame17);
+        const begin17 = call('storage.v1.upload.begin', { sessionId: created17.data.sessionId, expectedRevision: 0, declaredLength: bytes.length }, frame17);
+        const settled17 = await Promise.race([begin17, RP3_DELAY(1500).then(() => 'still-pending')]);
+        assert.notEqual(settled17, 'still-pending', 'the refusal must be synchronous');
+        assert.equal(settled17.ok, false, `the host must still be occupied while the open is unsettled: ${JSON.stringify(settled17)}`);
+        assert.equal(settled17.error.message, 'storage.v1/transfer-limit');
+        // The open settles LATE: the begin fails honestly and the handle is REALLY closed.
+        const closesBeforeLate = gates.handleCloses;
+        gates.releaseOpen();
+        const beginResult = await Promise.race([begin, RP3_DELAY(1500).then(() => 'still-pending')]);
+        assert.notEqual(beginResult, 'still-pending');
+        assert.equal(beginResult.ok, false, 'the cancelled upload must never succeed after the late open');
+        assert.equal(beginResult.error.message, 'storage.v1/unknown-session');
+        assert.ok(gates.handleCloses > closesBeforeLate, `the late handle must have been really closed (delta ${gates.handleCloses - closesBeforeLate})`);
+        await RP3_DELAY(50); // the tmp removal settles
+        const uploadsDir = path.join(root, 'uploads');
+        const parts = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir).filter(name => name.endsWith('.part')) : [];
+        assert.equal(parts.includes(`${parkedId}.part`), false, 'the cancelled upload\'s own .part must be cleaned by the late path');
+        assert.equal(parts.length, 15, 'the 15 ready uploads keep their live .part files');
+        assertPermits(svc, 15, 'the settled open released exactly its own permit');
+        // The freed slot admits the replacement (still 15 ready), which aborts cleanly.
+        const retry = await call('storage.v1.upload.begin', { sessionId: created17.data.sessionId, expectedRevision: 0, declaredLength: bytes.length }, frame17);
+        assert.equal(retry.ok, true, `the freed slot must admit the replacement: ${JSON.stringify(retry.error ?? {})}`);
+        const cleanup = await call('storage.v1.transfer.abort', { transferId: retry.data.transferId }, frame17);
+        assert.equal(cleanup.ok, true);
+    } finally {
+        gates.releaseOpen?.();
+        gates.openMatch = null;
+        gates.openMatched = false;
+        gates.openGate = null;
+        gates.openProxyMatch = null;
+        await svc.dispose({ timeoutMs: 3000 });
+    }
+});
+
+test('RP3 R3: a real db.commitSnapshot registration failure releases the transfer, the session slot and the permit, and keeps the revision unmoved', async () => {
+    const { svc, call, io } = await makeRp3Service({
+        label: 'rp3-r3-commitfail',
+        wrapLibrary: (realLibrary, ioLocal) => ({
+            ...realLibrary,
+            commitSnapshot(...args) {
+                if (ioLocal.commitReject) {
+                    throw Object.assign(Error('[rp3] SIMULATED db.commitSnapshot registration failure injected by the test'), { reason: 'database-locked', simulated: true });
+                }
+                return realLibrary.commitSnapshot(...args);
+            },
+        }),
+    });
+    try {
+        const created = await call('project.create', { name: 'RP3登记失败' });
+        const sessionId = created.data.sessionId;
+        // A fully VALID document: the ONLY failure is the database registration, not bad JSON.
+        const document = await sampleDoc('RP3登记失败');
+        const bytes = Buffer.from(JSON.stringify(document), 'utf8');
+        const begin = await call('storage.v1.upload.begin', { sessionId, expectedRevision: 0, declaredLength: bytes.length });
+        assert.equal(begin.ok, true, JSON.stringify(begin.error ?? {}));
+        for (let offset = 0; offset < bytes.length; offset += begin.data.chunkSize) {
+            const slice = bytes.subarray(offset, Math.min(offset + begin.data.chunkSize, bytes.length));
+            const chunk = await call('storage.v1.upload.chunk', { transferId: begin.data.transferId, offset, data: slice.toString('base64') });
+            assert.equal(chunk.ok, true, JSON.stringify(chunk.error ?? {}));
+        }
+        io.commitReject = true;
+        const failed = await call('storage.v1.upload.commit', { transferId: begin.data.transferId });
+        assert.equal(failed.ok, false, `the registration failure must fail the commit: ${JSON.stringify(failed)}`);
+        assert.equal(failed.error.message, 'storage.v1/database-locked', 'the frozen database-locked reason must surface');
+        assert.equal(svc._internal.transfers.size, 0, 'the failed registration must remove the transfer');
+        assert.equal(svc._internal.sessions.get(sessionId).uploadTransferId, undefined, 'the session slot must be freed');
+        assertPermits(svc, 0, 'the registration failure must release the host permit');
+        const status = await call('project.status', { projectId: created.data.projectId });
+        assert.equal(status.ok, true);
+        assert.equal(status.data.revision, 0, 'the trusted pointer stays unmoved');
+        // Once the fault clears, the SAME session saves for real.
+        io.commitReject = false;
+        const retry = await uploadDocument({ call, sessionId }, await sampleDoc('RP3登记成功'), { expectedRevision: 0 });
+        assert.equal(retry.ok, true, JSON.stringify(retry.error ?? {}));
+        assert.equal(retry.data.revision, 1);
+        assertPermits(svc, 0, 'the successful retry released its permit at the arbitration point');
+    } finally {
+        await svc.dispose({ timeoutMs: 3000 });
+    }
 });
