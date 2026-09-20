@@ -1,0 +1,234 @@
+task_id: DSK-004-RP4
+title: "objects/service 全路径有界读取"
+status: REWORK # 已冻结；首次全范围审查F1—F5；S1核心REWORK/执行BLOCKED，生产返工未开始
+freeze:
+  date: "2026-09-20"
+  requested: "提交进度到远程仓库，冻结进度"
+  approval: "ExitPlanMode《按最新指令冻结并推送检查点》已批准，仅整理记录、提交和普通push；覆盖历史non_goals中commit/push禁止项，不授权发布或继续实施。"
+  branch: "checkpoint/dsk-003-progress"
+  parent: "1536c2ad2aaf44b6d168075b8248d93c05c3cfe1"
+  state: FROZEN
+  remaining: "F1/F2生产未修；F3覆盖/F5取证未闭合；S1核心REWORK、执行BLOCKED；S5_DESKTOP_BLOCKED；人工PENDING；RP5—RP8未进入实施。"
+  simplified_trial: "用户选择本机桌面试跑，但完整精简方案未获批准、未执行；冻结取代继续试跑。"
+  evidence: "原始证据、S1工具及自检在仓库外本机目录，仅报告路径，不随Git上传；不追认缺失历史。"
+  execution: "冻结阶段不测试、不构建、不运行产品或清理探针；不宣称已认证当前零遗留进程；提交号与推送结果以Git实际核验为准。"
+s1_independent_review:
+  agent: director-reviewer
+  reference: "agent_aabc4053-b96d-4c5e-8e14-4b2df99f1ce7"
+  verdict: REWORK
+  execution: BLOCKED
+  desktop: S5_DESKTOP_BLOCKED
+  scope: "独立静态安全预审；未编译/执行候选、自检或产品测试；不是第二轮RP4全范围返工复审，review.rework_rounds保留1。"
+  findings:
+    - "S1-F1：创建挂起进程后Assign前日志可抛，finally只关空Job/句柄造成未归属进程遗留；清理日志可中断收尾；Terminate/Wait结果忽略、固定5000ms不随C剩余预算。"
+    - "S1-F2：driver WaitForExit(25000)超时只记outerKilled，未实际kill；Stop-Process -Id非持句柄清理，finally未清子进程，仍有无参数WaitForExit。"
+    - "S1-F3：setup/Resume前无完整R检查；成功判断早于deadline；C建立晚于终止/日志；同步写flush/hash/关闭未计入完整生命周期。"
+    - "S1-F4：Peek/Read的非BROKEN_PIPE错误也按EOF处理，可能误报SUCCESS。"
+    - "S1-F5：会计结构体漏TotalPageFaultCount；正确offset为page faults32/total36/active40/terminated44，不是Windows会计不可用；0x7A=ERROR_INSUFFICIENT_BUFFER，ERROR_MORE_DATA为234/0xEA。"
+    - "S1-F6：六份meta.log hash全部不符，Finish后仍append；源/exe hash仅finally登记，缺执行前绑定；summary覆盖且探针历史版本/输出不完整。"
+    - "S1-F7：ENV仅hash不能定位真实入口，cwd未传记null；仅ASCII argv/存在性验证，缺中文及精确ENV；核心写文件不能等同持续前台日志。"
+  historical_deviations:
+    - "cleanup-probe-leftovers.ps1以CIM命令行通配+Stop-Process裸PID清理，不是稳定句柄/严格身份匹配；违反批准约束，不追认11/11身份或无误伤。"
+    - "probejob/probejob2 Assign失败仍Resume，不得原样再运行。"
+    - "监督器被杀后日志不增长不能证明子树已退出；撤回全绿/零遗留/硬上界已独立证实等声明。"
+  precedence: "本节覆盖下方rework1_coder候选交接的冲突声明；保留原文及失败记录，不将其改写为新成功。"
+rework1_approval:
+  approved: true
+  reference: "本会话ExitPlanMode《RP4 首轮返工：F1—F5 分阶段实施》批准S0—S6；planner agent_9eb44e8d PLAN_READY。"
+  verification_root: "E:/director-desk/verify-rp4-rework1-ec5469ba"
+  baseline: "evidence/s0-manifest.json，620文件，SHA256=76d372298cc32fb7e22072a682c4e6ad9666daac7f5c3c783d27ff4bac36ebd7；本次审批工具更新后、登记/编码前。"
+  scope: "objects/service/storage测试及RP4任务报告进度；dispose仅bundler输入取证，不改既有适配或断言；工具/原生宿主/selftest仅新隔离根，不改桌面脚本。"
+  stage: S1_TOOL_PENDING
+  gate: "单coder先工具实现/selftest并停下，主会话独立reviewer工具PASS后才S2—S5生产返工。S5桌面另需内部清理安全门，无安全等效则BLOCKED申请范围，不改副本脚本冒称原测试通过。"
+  tool: "已装csc离线编译PInvoke Job宿主；suspended->assign->resume，kill-on-job-close，无继承/breakaway，句柄控制，rootexit仍管Job/管道。无PID兜底。"
+  budgets: "运行R/全局清理C秒：selftest10/5，短/编译20/10，dispose60/10，RP4/两套/build/prepare/每桌面180/15，npm420/15；外层R+C+10。超R FAIL、C未确认CLEANUP-BLOCKED。"
+  production: "F1稳定资源token/完整移交/主错误保全/单飞身份去重；F2全部必要close成功后no-clobber发布；F3逐A子场景；F5实际bundle inputs/hash/ENV及新产物。"
+  corrections:
+    - "撤回旧实现/报告的生产无死锁、真实rm必落地及唯一阻断点解释；成功绿测不能证明生产绝无问题。"
+    - "旧npm565pass+1文件级fail、约1021秒；名义420秒不等整树实际硬上界。"
+    - "撤回适配runner已核验归属及证明整树上界的声明；其成功结果保留但未验证安全超时路径，首次全范围review发现代码缺陷。"
+    - "诊断summary disposeStartedBeforeRmMatch字段与时间戳反向，以原trace时间戳为准，原文件保留。A6旧红只到(a)，不追认(b)/(c)。"
+    - "未跟踪计划由审批工具更新过；继承文件全程一字未改的声明不适用于所有历史时点，本轮只对S0冻结后保护。"
+  limits: "人工仍PENDING，不完整PASS；不RP5/gate/安装下载/commit/push，旧验证根只读。"
+source_root: "E:/director-desk/director-desk-web"
+base_commit: "1536c2ad2aaf44b6d168075b8248d93c05c3cfe1"
+initial_worktree: "5 tracked修改：planner/reviewer provider、RP3任务、RP3报告、进度；1 untracked计划。618文件当前字节冻结于verification_root/pre-task；清单evidence/pre-task-manifest.json sha256=f4a4e8a4f261a4f976e86e20455b6022e67027317eaaa9ba0b20df6d469cd5cb，早于本任务单创建。"
+contract_version: "现有 dsk.v1/storage.v1 公共契约与格式不变"
+verification_root: "E:/director-desk/verify-rp4-20260920T091147Z-c7ab2852"
+approval:
+  approved: true
+  reference: "本会话 ExitPlanMode《RP4 全路径有界读取：实施审批》已明确批准；planner agent_b8aa1380-af90-4507-b3ad-ecd351ff1cf6 PLAN_READY。"
+approved_dispose_adaptation:
+  approved: true
+  reference: "本会话ExitPlanMode《RP4 回归阻塞：单文件测试适配》明确批准；独立诊断agent_41df458c-9ff4-4c44-828c-00b6bd1977c5确认旧readFile屏障失效，实际到达轨迹仍需补证。"
+  scope: "仅tests/dsk-rp2-dispose.test.cjs第11例及同文件RP2_FSP_WRAPPER必要辅助；本次不再改生产或其他测试。保留其余断言与原5000ms/<4900ms要求。"
+  verification_root: "E:/director-desk/verify-rp4-dispose-adapt-20260920T142712Z-493c7be1"
+  before_manifest_sha256: "2d63ab7d4118f7b916dbba9aad8ba32a73b96b73265d8b071205e38cba44cf74"
+  approach: "精确.part只读open一次性门、read/rm到达信号与次数，handler结束后cleanup仍挂起/DB开/文件在；释放rm同一drain成功、关库恰1；finally释放。旧fixture仅隔离诊断加watchdog，不集成诊断版本。"
+  execution: "前台实时日志，无shell Node/npm CLI等价执行；定向20s/dispose60s/两套180s/npm420s完整自建进程树硬上界，准确归属后超时允许终止本次测试树并记FAIL。禁止操作ZCode或用户既有进程；无法保证上界则BLOCKED。"
+  evidence: "新证据保留全部DSK_RP入口环境、实际输入hash/esbuild输入及阶段轨迹；coder/reviewer独立可写副本。已有生产build/桌面记录仅核实适用性，不冒称重跑。"
+  diagnosis_corrections:
+    - "旧npm实际565 pass/1文件级fail，约1021s；420s仅runner名义预算，非整树硬上界。"
+    - "旧二分日志缺RP2入口hash与阶段轨迹，具体输入组合未充分验证；不能以文件未改或内存变化断言非产品回归。"
+    - "已确认读屏障失配；源码支持测试循环等待解释，实际顺序待新短证据确认。真实rm若挂起应由dispose有界blocked，不能声称真实I/O必然落地或生产绝无死锁。"
+  status: READY
+  overall_rp4: "仍BLOCKED，适配完成需独立审查及人工验收；不清零历史。"
+goal: "所有授权文件读取入口具备句柄检查、短读循环、严格limit+1实读上界、长度/hash校验及可追踪关闭失败，不破坏RP1—RP3。"
+context_files:
+  - "进度.md"
+  - ".zcode/plans/plan-sess_0f45933a-bf18-47df-952f-6fdc936de21f.md"
+  - "desktop/storage/objects.cjs"
+  - "desktop/storage/service.cjs"
+  - "desktop/storage/library.cjs"
+  - "shared/contracts/storage.ts"
+  - "tests/dsk-storage.test.cjs"
+  - "tests/dsk-rp2-dispose.test.cjs"
+allowed_changes:
+  - "desktop/storage/objects.cjs"
+  - "desktop/storage/service.cjs"
+  - "tests/dsk-storage.test.cjs"
+  - "tests/dsk-rp2-dispose.test.cjs（新增批准仅第11例及同文件fs wrapper必要适配，不弱化其他断言）"
+  - ".zcode/workflows/tasks/DSK-004-RP4.yaml"
+  - "implementation/DSK-004-RP4.md（新建）"
+  - "进度.md（仅追加RP4，保护既有内容）"
+non_goals:
+  - "不改其他生产文件、模块、测试、脚本、依赖、锁文件、代理配置、公共IPC或SQLite查询。"
+  - "64MiB/48KiB IPC/host16/10000快照/10GiB/4MiB manifest不变，不进入RP5编码或峰值工作。"
+  - "不重跑SQLite gate，不重开RP1—RP3验收，不安装下载、真实更新安装、付费业务、commit/push/发布。"
+design:
+  primitive: "objects内部共用收集/逐块消费原语，经内部store方法供service使用；无新模块。limit为非负安全有限整数且+1不溢出，对象声明≤64MiB；保留trusted/lstat拒链接，打开后handle.stat普通文件/尺寸；单次请求≤min(64KiB,limit+1-totalRead)，短读循环，0字节EOF，limit后1字节哨兵不传sink；精确长度/hash，流式处理背压及部分写入。"
+  routes: "get/put复用、verify/copy委托、上传tmp、snapshot.read、备份导出、manifest、恢复校验/复制/复核全接入；保留RP1活性仲裁及RP3permit。业务总量与多轮实际I/O遥测分开。"
+  errors: "沿用corrupt-object/upload-format/io-failure/backup-invalid/path-refused；不宽泛catch抹去链接错误，读取主错误与close错误并存时保留主错误并另记资源。"
+  cleanup: "批准内部store读取清理owner绑定与service既有RP2账本适配；无第二套drain/定时器。close失败同步交唯一owner，稳定身份、单飞重试、挂起/失败blocked且DB开，真实关闭后出账。独立store调用方显式接管资源；上传写句柄close失败不吞错继续提交。"
+  manifest: "现有序列化只做一次，UTF8≤4MiB才写，超限transfer-limit且不发布；非RP5逐token或峰值保证。真实10000不同digest/schema合法小对象顺序round-trip，保留既有5000/10000单digest。合法预算冲突停止重规划。"
+acceptance:
+  - id: A1
+    criterion: "非法limit、64MiB和超1字节；handle.stat可达，句柄初始超限零内容读取。"
+    evidence_required: "具名测试、fstat计数/实读计数、边界结果。"
+  - id: A2
+    criterion: "真实短读循环完整成功/hash一致，每请求≤64KiB，EOF不忙循环。"
+    evidence_required: "每次请求/返回/累计字节与实际句柄标识。"
+  - id: A3
+    criterion: "预检到open、fstat到首读、部分读取后增长/截断；累计≤limit+1且精确长度/hash校验。"
+    evidence_required: "可达屏障与次数、字节轨迹，不仅_lastReadBytes。"
+  - id: A4
+    criterion: "get/put复用与委托、真实snapshot.read触达读取门；损坏同名对象不覆盖。"
+    evidence_required: "真实入口调用、hash与原字节保护。"
+  - id: A5
+    criterion: "上传tmp正常/短读/增长/截断/read或close失败；失败revision/current不变、资源不遗失。"
+    evidence_required: "DB指针对照与句柄/临时路径清理记录。"
+  - id: A6
+    criterion: "多块流式导出；增长/截断/hash/写失败不发布且清自身目标，无无界readFile或全对象收集。"
+    evidence_required: "真实块/sink轨迹、失败发布与清理断言。"
+  - id: A7
+    criterion: "导入新/已有目标均有界，坏目标不变，临时文件不遗留不误删旧对象。"
+    evidence_required: "源/目标字节及tmp清理、预算轨迹。"
+  - id: A8
+    criterion: "恢复manifest/首次校验/再复制/复制后复核分别可达，变化被拒且无错误登记。"
+    evidence_required: "分阶段门命中、源项目/备份保持及登记计数。"
+  - id: A9
+    criterion: "合法JSON空白补齐4MiB-1/4MiB可恢复、+1拒；短读/增长/写超限；10000独立对象往返。"
+    evidence_required: "distinct digest、manifest UTF8/对象总字节/耗时、5000及10000旧场景保留。"
+  - id: A10
+    criterion: "stat/read/sink异常仍关闭；瞬时/持续close失败、挂起重试、叠加错误；无双owner，blocked DB开、清理后关库恰1。"
+    evidence_required: "close调用/并发计数、实际资源最终释放及DB关闭计数。"
+  - id: A11
+    criterion: "junction外部哨兵不变；abort/reload/close不迟到发布/登记，RP3permit和RP2drain保持。"
+    evidence_required: "既有回归及新读取屏障竞争真实断言。"
+  - id: A12
+    criterion: "真实旧源码具名行为红到同测新绿；全量/新build/prepare/三桌面通过，完整证据。"
+    evidence_required: "esbuild真实输入、源hash、完整命令/UTC/CWD/退出码和全部原始尝试日志。"
+verification:
+  - command: "node --experimental-strip-types --test --test-name-pattern RP4 tests/dsk-storage.test.cjs"
+    cwd: "verification_root下唯一隔离workspace，运行前登记绝对路径"
+    expected_result: "有效修前行为红，修后绿；缺新方法/入口未命中/解析失败非有效红。"
+  - command: "node --experimental-strip-types --test tests/dsk-storage.test.cjs tests/dsk-rp2-dispose.test.cjs"
+    cwd: "同隔离workspace"
+    expected_result: "exit0，无弱化旧断言"
+  - command: "npm test"
+    cwd: "同隔离workspace"
+    expected_result: "exit0，保留每次失败"
+  - command: "npm run build"
+    cwd: "同隔离workspace"
+    expected_result: "exit0，新生产产物"
+  - command: "npm run desktop:prepare"
+    cwd: "同隔离workspace"
+    expected_result: "exit0，含前置重复build，生成物不回拷主树"
+  - command: "node scripts/test-dsk-storage-desktop.mjs"
+    cwd: "同隔离workspace"
+    expected_result: "exit0"
+  - command: "node scripts/test-files-desktop.mjs"
+    cwd: "同隔离workspace"
+    expected_result: "exit0"
+  - command: "node scripts/test-dsk-rp2-exit-desktop.mjs"
+    cwd: "同隔离workspace"
+    expected_result: "exit0，stub/自然退出/故障注入边界如实"
+side_effects_approved:
+  - "唯一新隔离副本、修前快照、新日志和测试库/profile、fake updater、本机现有依赖及资产独立复制；无安装下载。"
+  - "在隔离副本build/prepare及既有三桌面回归，生成图标/staging等仅限副本；不共享coder/reviewer可写目录。"
+manual_acceptance:
+  required: "隔离库原生目录选择备份、恢复及取消；未完成标未验收，不宣告RP4完整PASS，不由stub替代。"
+  status: PENDING
+  remaining: "Windows11/断电/安装包及RP8其他验收仍未完成。"
+dependencies:
+  - "RP1/RP2/RP3及SQLite gate既有PASS保留"
+  - "执行前核实本机已有Node/node_modules/test-assets/Electron/Chrome离线条件；缺失阻塞"
+stop_conditions:
+  - "额外文件/契约/预算/依赖需求，资源owner无法闭合，10000合法对象预算冲突，红不可达/关键回归失败/保护hash异常。"
+rollback: "仅撤RP4相对pre-task的精确增量；不得reset/clean、覆盖继承改动或删除旧证据；生成产物不回拷。"
+implementation:
+  agent: director-coder
+  changed_files:
+    - "desktop/storage/objects.cjs（RP4候选 d8c8cf3e49f5…，前coder实现，本coder未改动，经全量验证保留）"
+    - "desktop/storage/service.cjs（RP4候选 857f67b7ab7…，前coder实现，本coder未改动，经全量验证保留）"
+    - "tests/dsk-storage.test.cjs（71355b652db…：前coder基础上新增A6 (b)/(c) sink写入经代理句柄的硬接通断言，(c)前置rmSync保留，静默note改为断言）"
+    - ".zcode/workflows/tasks/DSK-004-RP4.yaml（本节登记）"
+    - "implementation/DSK-004-RP4.md（新建报告）"
+    - "进度.md（仅追加RP4节）"
+  checks:
+    - "node --experimental-strip-types --test --test-name-pattern RP4 tests/dsk-storage.test.cjs（红，ENV→pre-task）: exit 1，9行为红+3控制绿（red-rp4-resume2，2026-09-20T11:32:39Z）"
+    - "同命令（绿，ENV={}）: exit 0，12/12（green-rp4-resume2，2026-09-20T11:34:58Z）；A6 sink失败注入已实证接通；A9 10000独立digest、manifest 3439133字节"
+    - "node --experimental-strip-types --test tests/dsk-storage.test.cjs: exit 0，83/83（storage-full-alone，2026-09-20T12:06Z）"
+    - "两套完整命令（storage+dispose）: TIMEOUT-FAIL 540s（two-suites-resume2）——唯一根因 dispose 第11例过时，见blockers"
+    - "npm test: TIMEOUT-FAIL 420s（npm-test-resume2）——565通过、0真实失败，仅 dsk-rp2-dispose 文件级挂起于同根因"
+    - "npm run build: exit 0（43s，postbuild隐私检查通过）"
+    - "npm run desktop:prepare: exit 0（14s，含重复build；生成物仅限隔离副本）"
+    - "node scripts/test-dsk-storage-desktop.mjs: exit 0（52s；原生目录选择边界如实标注）"
+    - "node scripts/test-files-desktop.mjs: exit 0（ok:true，9 checks）"
+    - "node scripts/test-dsk-rp2-exit-desktop.mjs: exit 0（ok:true，stub标注为mock）"
+    - "dispose 对照二分: pre-task全栈 0.6s PASS；候选objects+修前service 0.6s PASS；候选service为停滞触发方；dispose #12-#15对候选各自PASS"
+  dispose_adaptation_checks:
+    - "阶段1诊断（旧fixture仅加trace/watchdog，固定同候选生产，独立诊断目录、未集成主树）: exit 0（1.3s，diag-old-fixture，2026-09-20T14:47:02Z）。三项发现全部实证：F1 readFileGate未达（trace仅 open'wx'→open'r'→rm，无任何readFile调用）；F2 rm提前挂起（rmMatchedAt早于disposeStartedAt，dispose开始时transfers.size=0——是commit自身bad-json cancelTransfer的内联rm）；F3 releaseRead后commit未完。释放后commit=upload-format bad-json、drain ok、dbClose=1。"
+    - "适配后短pattern 'drain-initiated cleanup parks the loop'（ENV未设，候选生产）: exit 0，1/1，181ms（targeted-test11，2026-09-20T14:49:08Z，20s硬上界）。"
+    - "dispose全套15例（ENV未设）: exit 0，15/15，9.1s（dispose-full，2026-09-20T14:49:19Z，60s硬上界）；#12-#15等其余断言未改动未弱化。"
+    - "storage+dispose两套: exit 0，98/98（83+15），52.4s（two-suites，2026-09-20T14:49:41Z起，180s硬上界）。"
+    - "npm test（node npm-cli.js v11.17.0等价，无shell）: exit 0，570/570，59.6s（npm-test-full，2026-09-20T14:51:06Z起，420s硬上界）。570=旧证据565通过+第11例挂起时该文件未跑的5例，总数吻合。"
+    - "pre-task兼容控制（ENV→RP3冻结service bb7224bd镜像，只读源自旧verify根）: exit 0，1/1，170ms（pretask-compat-test11-mirror，2026-09-20T14:53:36Z）；轨迹明确显示走readFileGate分支。首次尝试直指旧根entry因esbuild无法解析zod失败（exit 1，pretask-compat-test11，2026-09-20T14:52:36Z，与RP4 notes旧失败同因），改用workspace内pre-task镜像后通过；旧根未被写入。"
+    - "全部运行经本次新建前台实时runner（隔离根runner.mjs，非仓库脚本，不复用旧shell runner）：无shell spawn、2s心跳、整树硬上界（20s/60s/180s/420s按阶段）、超时仅终止经祖先链+创建时间核实的本次进程树；本次无超时发生，无TIMEOUT-FAIL。"
+    - "before冻结620文件对照: 唯一diff=tests/dsk-rp2-dispose.test.cjs（白名单内，hash c836cbf2…→aa72a53d…），无缺失、无越界新增；objects d8c8cf3e…/service 857f67b7…/storage test 71355b65…字节不变；主树==副本。"
+  blockers:
+    - "tests/dsk-rp2-dispose.test.cjs 第11例（545行 drain-initiated cleanup parks the loop）对RP4后的生产读取路径过时：其以 fsp.readFile 停靠 commit，而RP4已按批准设计将 tmp 读取改为 store.readBoundedFile（A5 断言 never readFile）。commit 改为 dispose 前失败，其 cancelTransfer 内联 await 的 fsp.rm 恰被该测试 rmGate 停住，await committing 死锁。生产无死锁（真实rm会落地；RP2账本管rm失败）。最小修复为仅改该测试的停靠方式（如改停靠有界读取入口），该文件不在 allowed_changes 白名单内，未经批准不得改动。此为 npm test 与两套命令 exit 0 的唯一阻断点。"
+review:
+  agent: director-reviewer
+  verdict: REWORK
+  reference: "agent_118a54e7-7c5e-4907-bbea-8b545e2d220f首次全范围审查；前agent_41df458c仅阻塞诊断，不重复计轮次。"
+  findings:
+    - "F1高：无owner时关闭失败未移交可操作资源，多资源错误可丢失。"
+    - "F2高：流式导入源close成功前已发布；fail/hang时final已暴露。"
+    - "F3高：A1—A12必要子场景覆盖缺口，不以12绿或570全量绿抵消。"
+    - "F4高/执行BLOCKED：runner身份核验、rootexit/管道、整树运行清理截止未可靠实现；本次review未重跑测试。"
+    - "F5中：逐run真实bundle输入hash不足，报告无死锁/硬上界等声明需更正。"
+  unverified:
+    - "首轮全范围review静态/历史证据核验完成但技术未PASS；原生人工backup/restore/cancel仍PENDING。"
+    - "新工具需实际selftest和独立审查；桌面内部清理安全门待核实。"
+  rework_rounds: 1
+rework1_coder:
+  note: "RP4首轮返工S1（仅工具）事实追加；不改写任何既有字段或历史记录；stage保持S1_TOOL_PENDING，须独立reviewer工具PASS后才进入S2—S5生产返工。本节为coder候选交接，非门禁PASS、非验收。"
+  dispatch: "主会话派发仅S1；《RP4 首轮返工：F1—F5 分阶段实施》S0—S6已批准，S1独立门槛（工具自检后停下等独立工具review）。"
+  root: "E:/director-desk/verify-rp4-rework1-ec5469ba（新根；before 620文件与evidence/s0-manifest.json sha256=76d372298cc32fb7e22072a682c4e6ad9666daac7f5c3c783d27ff4bac36ebd7 编码后复核一致未动；三个旧验证根只读未动）"
+  tool: "coder/tools/dskrun.cs，离线csc 4.8.9221.0（C#5，.NET4，无新依赖）；exe sha256=9bde35ee1335feb36fa83948a4018d70cb467c71f415dfbe7c5291bc61330182，源 sha256=9f0019641c8a516074c68ee37e83d7aefdb2b14d56d37d594ad7c15bc63d1798。CREATE_SUSPENDED->AssignProcessToJobObject->ResumeThread，失败不恢复仅清理自建挂起进程；Job仅KILL_ON_JOB_CLOSE、句柄不继承、无breakaway、无PID扫描/taskkill兜底；rootexit不撤deadline继续监控成员与管道；R含setup/启动/子树/管道，C为单一全局清理窗，超R TIMEOUT-FAIL、C未确认CLEANUP-BLOCKED停止；成功=root业务0+Job空+双管道EOF；ENV清全部DSK_RP*再白名单（记录名字+值hash，不打印值）；无shell精确argv quoting；UTC/单调时间/句柄生命周期元数据/日志hash；退出码0/1/2/3/4/5/6。"
+  tool_finding: "本机实证（probejob）：JobObjectBasicAccountingInformation.ActiveProcesses对全新单成员Job返回聚合垃圾值（total=742→2189、active恒1），不可用作Job空信号；改用JobObjectBasicProcessIdList枚举（probejob2实证：分配后恰含子pid、自然退出清空、Terminate后清空、Terminate只及本Job成员）。另实证CreateProcessW传UTF-16 env块必须带CREATE_UNICODE_ENVIRONMENT，否则win32=87。"
+  selftest: "coder/tools/dsksample.cs + selftest/run-selftests.ps1（PS5.1前台串行，失败即停不重试到绿）。最终运行2026-09-20T16-54-44-860Z全部通过：编译131/102ms（预算20s）；case1a正常+ENV清白（工具侧与子进程侧双证）；case1b精确argv往返（引号/空格/&|<>/尾反斜杠）；case2 root 56ms退出而子进程持管道至3322ms才SUCCESS（deadline不撤）；case3 tree-hang(2)超R=10s整树Terminate、C=5s内确认、leftover=0；case4缺失exe→win32=2 LAUNCH_FAILED、负载marker未执行、无兜底；case5未知参数USAGE_ERROR exit 2未启动任何进程+外部哨兵全程不受影响仅被harness自己的句柄停止；case6监督器被杀后子树实际结束（KILL_ON_JOB_CLOSE，leftover=0、日志冻结）。运行R10/C5/外层25s逐例符合；编译20/10/外层40s符合。9次运行历史（含3个工具缺陷修复：0x400标志、hash共享冲突崩溃、ActiveProcesses不可用；及probe泄漏11个挂起进程按精确命令行清理11/11与驱动侧4处缺陷）全部保留于evidence/s1/attempts.txt与selftest/logs/，未删未改。"
+  desktop_safety: "只读审计：scripts/test-dsk-storage-desktop.mjs L78-81 killTree=spawnSync('taskkill',['/pid',child.pid,'/T','/F'])、L83 process.on('exit')对所有children（含正常退出未kill过的）再taskkill、L89 child.kill()+5s兜底killTree；test-files-desktop.mjs与test-dsk-rp2-exit-desktop.mjs走playwright-core _electron.launch/close。结论：外层Job能给R整树硬上界（含Electron孙代自动入Job），但脚本内部裸PID taskkill不因此消失——尤其exit钩子对已退出子进程PID执行taskkill /T /F存在PID复用误伤窗口，工具层无法在不改脚本的前提下安全修复。判定S5_DESKTOP_BLOCKED：需最小额外批准（脚本内改用真实已创建句柄/子Job控制通道+未知目标拒绝+完整语义与自检），不得以覆盖taskkill为空/成功冒称通过；本阶段未运行任何产品桌面脚本。核心工具是否成立与此门独立。"
+  s0_corrections_confirmed: "追认主会话已登记更正为事实：首次全范围review agent_118a54e7 REWORK、前阻塞诊断不计轮次；旧npm实为565pass+1文件级fail约1021s；撤回'生产无死锁/真实rm必落地/旧runner整树安全'声明（成功绿测不能证明生产绝无问题）；诊断summary disposeStartedBeforeRmMatch字段按原trace时间戳反向解释、原文件不改；A6旧红只到(a)可达，不追认(b)/(c)；审批工具的plan更新不归责coder；历史记录只追加事实，不全改为新成功。S0冻结后保护生效：before与s0-*本次零改动。"
+  limits: "人工仍PENDING；不RP5/gate/安装下载/commit/push；未运行npm/build/桌面脚本/产品测试；ASSIGN/RESUME失败路径为代码审计可及但无法确定性触发（记录于attempts.txt）；修复后CLEANUP_BLOCKED路径未被再次触发（run5实证过其如实停止行为）。"

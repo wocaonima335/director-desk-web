@@ -41,8 +41,17 @@ const gatedServicePromise = buildBundle(SERVICE_ENTRY, { fspGate: true });
 // SIMULATED rejection for exactly the test-picked path), a readFile gate (parks the matched
 // read behind a real-timer gate so a handler can be held mid-flight across a dispose start)
 // and a closeReject proxy (the matched fsp.open handle rejects close calls while armed, then
-// performs the REAL close once disarmed). State is shared across the bundles of one build
-// (service embeds objects/library) through globalThis, idempotently.
+// performs the REAL close once disarmed).
+// RP4-dispose-adaptation additions (tests/dsk-rp2-dispose.test.cjs #11 only): (a) a ONE-SHOT
+// open-park barrier that parks exactly one matched fsp.open BEFORE it executes — used for the
+// bounded core's read open fsp.open(partPath, 'r'); write opens ('wx') pass straight through —
+// and (b) explicit ARRIVAL SIGNALS + CALL COUNTERS (readArrived/signalReadArrived, rm arrival
+// signal, rmCalls) so the adapted test waits on deterministic signals instead of sleep-guessed
+// timing. The legacy readFile gate branch is KEPT unchanged as the pre-task compat control:
+// when DSK_RP2_SERVICE_ENTRY points at the archived RP3-frozen service, its commit still reads
+// the tmp via fsp.readFile, so the same arrival signal is wired through that branch. State is
+// shared across the bundles of one build (service embeds objects/library) through globalThis,
+// idempotently.
 const RP2_FSP_WRAPPER = `
 const real = require('fs/promises');
 const state = globalThis.__rp2FspGates || {
@@ -52,8 +61,19 @@ const state = globalThis.__rp2FspGates || {
     readFileGateMatch: null, readFileGate: null,
     closeRejectMatch: null, closeRejectArmed: false, closeRejectActive: false, closeRejectCalls: 0,
     closeScript: null, closeGate: null, closeParked: 0,
+    openParkMatch: null, openParkConsumed: false, openParkCalls: 0, openParkPath: null, openParkFlags: null,
+    openGate: null, readArrived: false, signalReadArrived: null,
+    rmCalls: 0, rmArrivedCount: 0, signalRmArrived: null,
 };
 globalThis.__rp2FspGates = state;
+function signalReadArrival() {
+    state.readArrived = true;
+    if (typeof state.signalReadArrived === 'function') state.signalReadArrived();
+}
+function signalRmArrival() {
+    state.rmArrivedCount += 1;
+    if (typeof state.signalRmArrived === 'function') state.signalRmArrived();
+}
 function simulatedDenial(kind, target) {
     const error = new Error('[rp2-fsp-gate] SIMULATED ' + kind + ' denial injected by the test (not a real OS permission failure): ' + target);
     error.code = 'EACCES';
@@ -62,6 +82,7 @@ function simulatedDenial(kind, target) {
 }
 module.exports = {
     rm(...args) {
+        state.rmCalls += 1;
         // F1 script: per matched call consume one step — 'reject' denies once, 'pend' parks the
         // call behind rmGate until released (a genuinely hanging cleanup attempt).
         if (typeof state.rmScriptMatch === 'function' && state.rmScriptMatch(...args) && Array.isArray(state.rmScript) && state.rmScript.length) {
@@ -75,6 +96,7 @@ module.exports = {
             }
             if (step === 'pend') {
                 state.rmParked += 1;
+                signalRmArrival();
                 return Promise.resolve(state.rmGate).then(() => real.rm(...args));
             }
         }
@@ -89,17 +111,30 @@ module.exports = {
         }
         if (typeof state.rmMatch === 'function' && !state.rmMatched && state.rmMatch(...args)) {
             state.rmMatched = true;
+            signalRmArrival();
             if (state.rmGate) return state.rmGate.then(() => real.rm(...args));
         }
         return real.rm(...args);
     },
     async readFile(...args) {
         if (typeof state.readFileGateMatch === 'function' && state.readFileGateMatch(...args) && state.readFileGate) {
+            signalReadArrival(); // pre-task compat branch: the legacy tmp read arrives here
             await state.readFileGate;
         }
         return real.readFile(...args);
     },
     async open(...args) {
+        // RP4-dispose-adaptation: ONE-SHOT read barrier ahead of exactly one matched open — the
+        // bounded core's fsp.open(path, 'r'). The real open executes only on release; write
+        // opens ('wx') never match and pass straight through.
+        if (typeof state.openParkMatch === 'function' && !state.openParkConsumed && state.openParkMatch(...args)) {
+            state.openParkConsumed = true; // exactly one matched open is parked
+            state.openParkCalls += 1;
+            state.openParkPath = args[0];
+            state.openParkFlags = args[1];
+            signalReadArrival();
+            await state.openGate;
+        }
         const handle = await real.open(...args);
         if (state.closeRejectArmed && typeof state.closeRejectMatch === 'function' && state.closeRejectMatch(...args)) {
             state.closeRejectArmed = false; // exactly one matched handle is proxied
@@ -163,6 +198,24 @@ function freshRoot(label) {
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+/** Deterministic barrier wait: resolves on the wrapper's arrival signal; only a generous
+ * WATCHDOG (pure failure diagnostics, never a timing assertion) bounds the wait so a missed
+ * signal fails loudly instead of hanging the suite. Sleep-guessed sequencing stays out of the
+ * adapted barriers. */
+async function waitForSignal(signal, what) {
+    const WATCHDOG_MS = 8000;
+    let timer;
+    const watchdog = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`[rp2-fsp-gate] watchdog: waited ${WATCHDOG_MS}ms for ${what} — the gate never arrived`)), WATCHDOG_MS);
+    });
+    timer.unref?.();
+    try {
+        await Promise.race([signal, watchdog]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
 
 /** DB-open probe that works identically against the pre-fix and current _internal surface. */
 function dbOpen(svc) {
@@ -533,47 +586,84 @@ test('RP2: dispose stops the service synchronously (refuses requests, advances t
     assert.equal(dbOpen(svc), false);
 });
 
-/** A1: cleanup work that the DRAIN ITSELF initiates is covered by the same bounded loop. A
- * commit parked on the gated readFile keeps a handler in flight across the dispose start;
- * closeSession (inside performDrain) then initiates the transfer cleanup AFTER dispose was
- * invoked, its rm parks on the gate, and the handler continuation fails honestly mid-wait.
- * Releasing the rm settles the cleanup during the wait and the SAME drain finishes without a
- * premature DB close. (Production cannot register a BRAND-NEW cleanup after dispose — the
- * synchronous stop refuses every entry point; what genuinely happens mid-wait is this
- * drain-initiated cleanup settling, and failing cleanups mid-wait are covered by the R2
- * ledger tests.) */
-test('RP2: drain-initiated cleanup parks the loop and settles mid-wait — the same bounded drain finishes without a premature close', async () => {
+/** A1: cleanup work that the DRAIN ITSELF initiates is covered by the same bounded loop. The
+ * commit's staged-tmp read is parked on a ONE-SHOT read barrier placed ahead of the exact
+ * fsp.open(partPath, 'r') the RP4 bounded core performs (write opens 'wx' are never touched).
+ * Pre-task compat control (DSK_RP2_SERVICE_ENTRY set): the archived RP3-frozen commit still
+ * reads the tmp via fsp.readFile, so the SAME arrival signal is wired through the legacy
+ * readFile gate branch — an explicit branch over the shared wrapper gate protocol, never a
+ * production behavior change. dispose is started while the read is parked; closeSession
+ * (inside performDrain) then initiates the transfer cleanup AFTER dispose was invoked and its
+ * rm parks on the rm gate (deterministic arrival signal). Releasing the read lets the bounded
+ * read return and the parked handler continuation fail honestly mid-wait — the exact identity
+ * failure 'storage.v1/unknown-transfer', because the drain's cancel won the race (the same
+ * F04 re-check exists in the pre-task source). Releasing the rm settles the cleanup during
+ * the wait, the SAME bounded drain finishes without a premature close (5s budget, settles
+ * well under it), the .part is REALLY deleted, db.close runs EXACTLY once (counted via a
+ * library wrapper) and a repeated dispose returns the cached success without closing again.
+ * All barriers use entry/release signals and counted arrivals — no sleep-guessed timing.
+ * (Production cannot register a BRAND-NEW cleanup after dispose — the synchronous stop
+ * refuses every entry point; what genuinely happens mid-wait is this drain-initiated cleanup
+ * settling, and failing cleanups mid-wait are covered by the R2 ledger tests.) */
+test('RP2: drain-initiated cleanup parks the loop and settles mid-wait — the same bounded drain finishes without a premature close', async t => {
+    // Explicit pre-task branch: only WHICH gate parks the read differs (readFileGate for the
+    // archived control, the one-shot fsp.open(path, 'r') barrier for RP4 production).
+    const preTaskEntry = Boolean(process.env.DSK_RP2_SERVICE_ENTRY);
     const contracts = await contractsPromise;
     const { createStorageService } = await gatedServicePromise;
+    const { openLibrary } = await libraryPromise;
     const root = freshRoot('midwait-cleanup');
-    const svc = createStorageService({ root, dialog: null, verifiers: verifiersFrom(contracts) });
+    const realLib = openLibrary({ file: path.join(root, 'library.sqlite'), now: () => Date.now() });
+    let dbCloseCount = 0;
+    const library = { ...realLib, close() { dbCloseCount += 1; realLib.close(); } };
+    const svc = createStorageService({ root, library, dialog: null, verifiers: verifiersFrom(contracts) });
     const call = (action, data) => svc.runInRequestContext(FRAME, () => svc.handlers[action](data));
     const created = await call('project.create', { name: '等待中清理' });
+    assert.equal(created.ok, true, JSON.stringify(created));
     const begin = await call('storage.v1.upload.begin', { sessionId: created.data.sessionId, expectedRevision: 0, declaredLength: 16 });
     assert.equal(begin.ok, true, JSON.stringify(begin));
     const partPath = path.join(root, 'uploads', `${begin.data.transferId}.part`);
     // One chunk of 16 bytes that is NOT valid JSON: after the parked read is released the
-    // commit continuation fails honestly into cancelTransfer mid-drain.
+    // commit continuation can only fail honestly — the drain's cancel has already won.
     await call('storage.v1.upload.chunk', { transferId: begin.data.transferId, offset: 0, data: Buffer.from('x'.repeat(16)).toString('base64') });
     const gate = gates();
-    gate.readFileGateMatch = target => target === partPath;
-    gate.readFileGate = new Promise(resolve => { gate.releaseRead = resolve; });
+    const readArrived = new Promise(resolve => { gate.signalReadArrived = resolve; });
+    const rmArrived = new Promise(resolve => { gate.signalRmArrived = resolve; });
     gate.rmGate = new Promise(resolve => { gate.releaseRm = resolve; });
     gate.rmMatch = target => target === partPath;
-    gate.rmMatched = false;
+    gate.rmMatched = false; // per-test arming: an earlier test's consumed gate must not leak
+    if (preTaskEntry) {
+        gate.readFileGateMatch = target => target === partPath;
+        gate.readFileGate = new Promise(resolve => { gate.releaseRead = resolve; });
+    } else {
+        // ONE-SHOT read barrier ahead of exactly this .part read open ('r'); the upload's own
+        // write open ('wx') and every other open pass straight through, never intercepted.
+        gate.openParkMatch = (target, flags) => target === partPath && flags === 'r';
+        gate.openGate = new Promise(resolve => { gate.releaseRead = resolve; });
+    }
+    const rmCallsBefore = gate.rmCalls; // cumulative counter → per-test baseline
     try {
-        const committing = call('storage.v1.upload.commit', { transferId: begin.data.transferId }); // parks at readFile
-        await sleep(80);
+        const committing = call('storage.v1.upload.commit', { transferId: begin.data.transferId }); // parks at the read barrier
+        await waitForSignal(readArrived, 'the commit read to arrive at the barrier');
+        t.diagnostic(`stage: read parked (${preTaskEntry ? 'readFileGate, pre-task branch' : `fsp.open(path, 'r') one-shot barrier, parkedCalls=${gate.openParkCalls}`})`);
+        assert.equal(gate.rmCalls, rmCallsBefore, 'dispose 前 rm 不得发生');
+        assert.equal(gate.rmMatched, false, 'dispose 前 drain 尚未发起清理');
         assert.equal(svc.pendingOperationCount(), 1, '挂起的 commit 必须计入 pending');
         const startedAt = Date.now();
         const draining = svc.dispose({ timeoutMs: 5000 });
-        await sleep(200); // the drain is now waiting; closeSession has initiated the cleanup
+        // The drain-initiated cleanup rm must arrive and park — signalled, not slept.
+        await waitForSignal(rmArrived, 'the drain-initiated cleanup rm to arrive at the gate');
+        t.diagnostic(`stage: drain-initiated rm parked (rmArrivedCount=${gate.rmArrivedCount})`);
         assert.equal(dbOpen(svc), true, '等待期间数据库必须保持打开');
         assert.equal(fsSyncExists(partPath), true, '挂起的 rm 尚未落地，.part 必须仍在');
         gate.releaseRead(); // the parked handler continuation fails honestly MID-WAIT
         const commit = await committing;
         assert.equal(commit.ok, false, '停服后的迟到提交必须如实失败');
-        await sleep(120);
+        assert.equal(commit.error && commit.error.message, 'storage.v1/unknown-transfer',
+            `提交必须在有界读取返回后以身份失败如实拒绝（drain 的取消已赢得竞争）：${JSON.stringify(commit)}`);
+        t.diagnostic(`stage: commit settled honestly (${commit.error && commit.error.message})`);
+        assert.equal(svc.pendingOperationCount(), 0, '处理器落地后 pending 必须归零');
+        assert.ok(svc._internal.pendingCleanupCount() >= 1, 'drain 发起的清理必须仍在账上');
         assert.equal(dbOpen(svc), true, '处理器落地后清理仍挂起，数据库必须继续等待');
         assert.equal(fsSyncExists(partPath), true);
         gate.releaseRm(); // the drain-initiated cleanup settles mid-wait
@@ -583,9 +673,23 @@ test('RP2: drain-initiated cleanup parks the loop and settles mid-wait — the s
         assert.ok(elapsed < 4900, `排空必须在清理落地后有界返回（实际 ${elapsed}ms），不得等满预算`);
         assert.equal(fsSyncExists(partPath), false, '清理必须真正落地');
         assert.equal(dbOpen(svc), false);
+        assert.equal(dbCloseCount, 1, `数据库必须恰一次关闭：${dbCloseCount}`);
+        // A repeated dispose returns the cached success and never closes again.
+        const repeat = await svc.dispose({ timeoutMs: 1000 });
+        assert.equal(repeat.ok, true, '重复 dispose 返回缓存的关闭结果');
+        assert.equal(dbCloseCount, 1, '重复 dispose 不得二次关库');
     } finally {
-        gate.releaseRead?.();
-        gate.releaseRm?.();
+        gate.releaseRead?.(); // failure-proof release: a parked read must never outlive the test
+        gate.releaseRm?.();   // failure-proof release: a parked cleanup must never outlive the test
+        gate.signalReadArrived = null;
+        gate.signalRmArrived = null;
+        gate.readFileGateMatch = null;
+        gate.readFileGate = null;
+        gate.openParkMatch = null;
+        gate.openGate = null;
+        gate.rmMatch = null;
+        gate.rmGate = null;
+        gate.rmMatched = false;
     }
 });
 

@@ -118,7 +118,16 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
     removeTmp = target => fsp.rm(target, { force: true }),
     ensureDir = target => fsp.mkdir(target, { recursive: true }) } = {}) {
     const requestContext = new AsyncLocalStorage();
-    const store = objects ?? createObjectStore({ root });
+    // RP4: when the service creates the store itself, every read-handle close failure is handed
+    // to the EXISTING RP2 unresolved-cleanup ledger — one owner, no second drain or timer.
+    // Resources enter with a stable identity (`read-<session>:<label>`), are retried by the
+    // drain's single-flight attempts, and leave only after a real close. An injected store
+    // (tests/RP3 harness) keeps full ownership inside the store, whose close failures surface
+    // as operation failures for the independent caller to take over explicitly.
+    const store = objects ?? createObjectStore({
+        root,
+        onReadCloseFailure: resource => recordUnresolvedCleanup(resource, resource.stage ?? 'close', resource.error),
+    });
     const db = library ?? openLibrary({ file: path.join(root, 'library.sqlite'), now });
     const sessions = new Map(); // sessionId -> session
     const transfers = new Map(); // transferId -> transfer
@@ -135,6 +144,12 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
     // initializations. An initialization that never settles correctly keeps holding its permit
     // (no fake timeout clears it). Exit-drain accounting stays with RP2
     // (pendingOperations/pendingCleanups); permits only gate NEW transfer admission.
+// RP4: every remaining service-side file read goes through the store's bounded-read core — the
+// upload-commit tmp read, the restore manifest read and the per-object restore verification —
+// with declared-length (+1 sentinel) bounds, post-open handle.stat and single-owner close
+// handling. A genuine upload write-handle close failure fails the commit and joins the RP2
+// ledger instead of being swallowed; the backup manifest is serialized exactly once and only
+// written when its UTF-8 size fits the derived 4MiB budget (transfer-limit, never published).
     const hostPermits = new Set();
     /** RP3: idempotent release — a late settle releases only its own identity's permit. */
     function releaseHostPermit(transfer) {
@@ -616,11 +631,32 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                     await cancelTransfer(transfer, 'incomplete');
                     return fail('upload-format', '上传未完成，不能提交');
                 }
-                try { await transfer.handle.close(); } catch { /* tolerate double close */ }
+                // RP4: a GENUINE write-handle close failure must never be swallowed into a
+                // commit. The handle is handed to the single cleanup owner here (registered
+                // exactly once — cancelTransfer's own close is skipped by clearing the field),
+                // the commit fails, and only the drain's single-flight retry may really close it.
+                try { await transfer.handle.close(); }
+                catch (closeError) {
+                    if (!isAlreadyClosedError(closeError)) {
+                        const handle = transfer.handle;
+                        recordUnresolvedCleanup({ transferId: transfer.transferId, stage: 'close', handle, label: '上传临时文件' }, 'close', closeError);
+                        transfer.handle = null;
+                        await cancelTransfer(transfer, 'tmp-close-failed');
+                        return fail('io-failure', '上传临时文件句柄关闭失败，保存未提交');
+                    }
+                }
                 let bytes;
                 try {
-                    bytes = await fsp.readFile(transfer.tmpPath);
-                } catch {
+                    // RP4: the staged upload is read through the bounded core — limit is the
+                    // declared length (+1 growth sentinel), fstat before the first read, real
+                    // short-read looping — never an unbounded readFile of the tmp file.
+                    bytes = await store.readBoundedFile(transfer.tmpPath, { limit: transfer.declaredLength, label: '上传临时文件' });
+                } catch (error) {
+                    if (error && error.reason === 'corrupt-object'
+                        && /长度上限|大小超过上限|预算上限|读取不完整/.test(String(error.message))) {
+                        await cancelTransfer(transfer, 'length-mismatch');
+                        return fail('upload-format', '上传内容长度与声明不符');
+                    }
                     await cancelTransfer(transfer, 'tmp-read-failed');
                     return fail('io-failure', '上传临时文件读取失败');
                 }
@@ -892,7 +928,16 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
                     snapshots: view.snapshots.map(s => ({ snapshotId: s.snapshotId, revision: s.revision, digest: s.digest, length: s.length, createdAt: s.createdAt })),
                     objects: [...objects.values()],
                 };
-                await fsp.writeFile(path.join(stagingDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+                // RP4: the manifest JSON is serialized EXACTLY ONCE and its UTF-8 byte size is
+                // checked against the derived 4MiB budget BEFORE the staging write. An
+                // over-budget manifest is never written or published (transfer-limit); the
+                // catch below removes this request's own staging directory. This is a
+                // serialize-once write check, not a bounded per-token encoder or a peak promise.
+                const manifestBytes = Buffer.from(JSON.stringify(manifest, null, 2), 'utf8');
+                if (manifestBytes.length > MANIFEST_MAX_BYTES) {
+                    throw Object.assign(Error('备份清单超过大小上限，未发布'), { reason: 'transfer-limit' });
+                }
+                await fsp.writeFile(path.join(stagingDir, 'manifest.json'), manifestBytes);
                 // F12/RP1: publish only into a still-live context; late returns clean up staging.
                 // This is the backup's LAST cancellable point — once the rename starts the publish
                 // is committed: there is no cancellation past it, the result is reported truthfully
@@ -1013,8 +1058,17 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
             throw Object.assign(Error('备份清单超过大小上限'), { reason: 'backup-invalid' });
         }
         let manifestRaw;
-        try { manifestRaw = JSON.parse(await fsp.readFile(path.join(directory, 'manifest.json'), 'utf8')); }
-        catch { throw Object.assign(Error('备份清单不是有效的 JSON'), { reason: 'backup-invalid' }); }
+        try {
+            // RP4: the manifest is read through the bounded core (lstat refusal, post-open
+            // handle.stat, at most MANIFEST_MAX_BYTES + 1 growth-sentinel bytes actually read);
+            // a manifest that grows past the budget after the pre-check is refused by the
+            // sentinel instead of being fully buffered. path-refused is never rewritten here.
+            manifestRaw = JSON.parse((await store.readBoundedFile(path.join(directory, 'manifest.json'),
+                { limit: MANIFEST_MAX_BYTES, label: '备份清单', refusalReason: 'backup-invalid' })).toString('utf8'));
+        } catch (error) {
+            if (error && error.reason === 'path-refused') throw error;
+            throw Object.assign(Error('备份清单不是有效的 JSON'), { reason: 'backup-invalid' });
+        }
         const manifest = verifiers.manifest.safeParse(manifestRaw);
         if (!manifest.success) throw Object.assign(Error('备份清单未通过契约校验'), { reason: 'backup-invalid' });
         const manifestData = manifest.data;
@@ -1109,9 +1163,14 @@ function createStorageService({ root, verifiers, dialog, now = () => Date.now(),
         const totalBytes = manifestData.objects.reduce((sum, o) => sum + o.length, 0);
         if (totalBytes > STORAGE_BACKUP_MAX_BYTES) throw Object.assign(Error('备份对象总大小超出上限'), { reason: 'backup-invalid' });
         // Full content verification: size, digest and document validity for every object.
+        // RP4: every object is read through the bounded core (post-open handle.stat with ZERO
+        // content reads when the handle already mismatches its declared length, requests of at
+        // most min(64KiB, length+1-total), growth sentinel) — never an unbounded per-object
+        // readFile. verifiedBytes stays the BUSINESS budget total, separate from the actual
+        // multi-round I/O telemetry kept inside the store.
         let verifiedBytes = 0;
         for (const object of manifestData.objects) {
-            const bytes = await fsp.readFile(path.join(objectsDir, `${object.digest}.json`));
+            const bytes = await store.readBoundedFile(path.join(objectsDir, `${object.digest}.json`), { limit: object.length, label: '备份对象' });
             verifiedBytes += bytes.length;
             if (verifiedBytes > STORAGE_BACKUP_MAX_BYTES) {
                 throw Object.assign(Error('备份对象总大小超出上限'), { reason: 'backup-invalid' });

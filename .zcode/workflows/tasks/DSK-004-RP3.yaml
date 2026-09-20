@@ -1,6 +1,6 @@
 task_id: DSK-004-RP3
 title: "统一host16上传下载及初始化配额"
-status: IMPLEMENTED # round1窄返工完成（agent_a4dacbb5 R1/R2/R3覆盖项，service零改动）；RP3全集21/21+两套件86/86+npm 558/558；待复审，父DSK-004仍REWORK
+status: PASS # 2026-09-20 agent_441e1fc6 独立复审A1—A9/R1—R3通过，仅RP3局部；首轮REWORK历史保留，父DSK-004仍REWORK，RP4未启动
 source_root: "E:/myProgram/DirectorDesk/director-desk-web"
 base_commit: "cc10acef36f971cfa2ad1ad82bdbd342679c01d1"
 initial_worktree: "初始仅RP2及ownership-01两任务的主会话PASS登记修改；本任务单新增。编码前保存实际status及相关文件内容快照，不假称clean。"
@@ -75,7 +75,23 @@ implementation:
   blockers: []
 review:
   agent: director-reviewer
-  verdict: REWORK # round1（agent_a4dacbb5-2523-4b73-b5ef-393aad21ca07）三组覆盖/声明问题已按窄返工补齐，IMPLEMENTED待复审
+  verdict: PASS # 独立终审仅RP3局部；下方reference/findings保留首轮REWORK历史
+  final_reference: "agent_441e1fc6-a996-4fe5-be6f-0e1d2aa9eacb；基线1536c2ad2aaf44b6d168075b8248d93c05c3cfe1；2026-09-20正式PASS，A1—A9/R1—R3通过，无阻断。"
+  final_source_root: "E:/director-desk/director-desk-web"
+  final_evidence_root: "E:/director-desk/review-rp3-20260920T065343Z-e28d562a/evidence"
+  final_checks:
+    - "review-two-suites-1789887374733.raw.log/.json：两套unit 86/86，exit0。"
+    - "review-npm-test-1789887406881.raw.log/.json：npm test 558/558，exit0。"
+    - "review-parent-rp3-1789887571353.raw.log/.json：新Git父基线cc10ace原字节，RP3/RP2入口同时命中；21项10行为红/11控制绿，exit1，A9确在父入口通过。非历史日志恢复。"
+    - "review-current-rp3-1789887612030.raw.log/.json：清除两个快照入口变量，当前RP3 21/21，exit0。"
+    - "review-protection-1789887632360.json：审后登记前617tracked+1untracked在源/副本1236次hash比对零差异；service=bb7224bd91aa8b96d916918208c57e4cba98699a0882c8b61649a32edfd6fc40。"
+  final_nonblocking:
+    - "N1低：进度.md首轮mixed红例误写16真实上传方向，主会话审后订正，区分round0 mixed与round1 R2独立用例；不影响A2/R2通过。"
+  final_limits:
+    - "旧tmp证据本机缺失；不追认旧日志、旧快照hash或历史失败归因。历史npm偶发失败原因仍未证实。"
+    - "A4/A6结合已运行场景及共同调用链，不声称穷举方向×取消原因。open屏障是包装器调用边界，登记失败为注入，非OS内核挂起或真实SQLite锁竞争。"
+    - "未重跑SQLite gate/build/prepare/桌面；原生UI/Windows11/断电/安装包未验收。父DSK-004仍未完成，RP4未启动。"
+  prior_interruption: "远程冻结记录中的usage_limit_reached复审中断无结论，不计新的REWORK。"
   reference: "R1 迟到settle证明力不足；R2 A2名称失实+16真实上传方向缺测+旧红getObject9归因错；R3 缺open尾段/DB登记失败/A9 cleanup独立挂起与close计数。未确认生产缺陷，原则不改service——round1 service零改动（bb7224bd一致）。"
   findings:
     - "R1：旧gate settle先于replacement，不能证旧请求迟到不清新槽——已补4用例（双独立屏障+到达信号+同一性/槽/permit/真实完成断言+reload新代/跨frame变体）。"

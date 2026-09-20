@@ -3,7 +3,54 @@
 - 任务：统一 host16 上传/下载及未终结初始化配额（批准计划 plan-sess_0f45933a-bf18-47df-952f-6fdc936de21f.md 第 14/30 行 RP3 项；任务单 `.zcode/workflows/tasks/DSK-004-RP3.yaml`）
 - 源码根：`E:/myProgram/DirectorDesk/director-desk-web`；基线：HEAD `cc10acef36f971cfa2ad1ad82bdbd342679c01d1`
 - 初始工作树：仅主会话的 RP2 / RP2-ownership-01 两处 PASS 登记修改 + 本任务单（未提交，全部保留，未触碰）
-- 状态：**IMPLEMENTED（待独立 director-reviewer 审查；不代表 DSK-004 整体 PASS，不代表已提交/验收）**
+- 当前状态：**RP3 独立局部 PASS（2026-09-20，agent_441e1fc6-a996-4fe5-be6f-0e1d2aa9eacb）；DSK-004 整体仍未完成，RP4 未启动。** 以下原实施/返工记录保留历史语境；本次审查基线为 `1536c2ad2aaf44b6d168075b8248d93c05c3cfe1`，本机根为 `E:/director-desk/director-desk-web`。审后登记未提交/推送。
+
+## 2026-09-20 独立最终复审（主会话登记）
+
+结论：**PASS，仅限 DSK-004-RP3**。原首轮 REWORK 和一次窄返工保留；远程记录的额度中断没有结论，不计新返工。无阻断项，N1 为低严重度文案订正。
+
+### 验收表
+
+| 项目 | 判定 | 独立核实依据（代码位置为审查时行号） |
+|---|---|---|
+| A1 | PASS | 16 pending 下载占满、第17零新增I/O；ready/非末块保留、末块释放。storage测试2285—2342。 |
+| A2 / R2 | PASS | mixed满16双向拒绝；16真实ready上传后的第17下载拒且getObject=0。storage测试2344—2444。 |
+| A3 | PASS | 15槽同tick双方向竞争仅一准入，败者不启动I/O。storage测试2446—2493。 |
+| A4 | PASS | abort/expiry/取消循环及上传reload/close共同路径，map/session归还后未settle仍占permit。storage测试2495—2656、3115—3201；service255—283。 |
+| A5 | PASS | handoff同一permit；迟到resolve/reject不成功、不复活、不多释放。storage测试2658—2898。 |
+| A6 | PASS | 初始化失败与ready终态、提交/登记失败、末块释放，非末块保留。storage测试2900—3055、3203—3248及既有expiry532—545。 |
+| A7 / R1 | PASS | 同session resolve/reject、reload新代、跨frame四例均先新登记再旧settle，检查对象同一性/槽/permit2降1及真实完成；sender销毁不遗留。storage测试2716—2898、3057—3082。 |
+| A8 | PASS | frame每方向1和session互斥不变，公共契约未变。storage测试3084—3113。 |
+| A9 | PASS | handler挂起blocked→独立cleanup挂起仍blocked且close0→cleanup完成close恰1，重复dispose仍1。dispose测试731—813。 |
+| R3 | PASS | open包装器门后真实open/close、自身.part清理；合法文档实际到commitSnapshot后注入失败；A9三阶段与close计数。storage测试3115—3248及dispose测试731—813。 |
+
+### 本次新证据索引
+
+证据根：`E:/director-desk/review-rp3-20260920T065343Z-e28d562a/evidence/`。运行CWD为同级 `workspace/`。以下每个名称均有 `.raw.log` 完整日志和 `.json` 命令/环境/退出码回执。
+
+| 名称 | 命令及结果 |
+|---|---|
+| `review-two-suites-1789887374733` | `node --experimental-strip-types --test tests/dsk-storage.test.cjs tests/dsk-rp2-dispose.test.cjs`；exit0，86/86。 |
+| `review-npm-test-1789887406881` | `npm test`；exit0，558/558。 |
+| `review-parent-rp3-1789887571353` | 同两套文件加 `--test-name-pattern RP3`；同时设置 `DSK_RP3_SERVICE_ENTRY` 和 `DSK_RP2_SERVICE_ENTRY` 为新父基线入口；exit1，10行为红/11控制绿。 |
+| `review-current-rp3-1789887612030` | 同RP3命令，清除上述两个快照入口变量；exit0，21/21。 |
+
+父基线入口：隔离workspace下 `tmp/rp3-parent-796b980a/desktop/storage/service.cjs`，从完整Git提交 `cc10acef36f971cfa2ad1ad82bdbd342679c01d1` 用 `git show` 导出原字节，SHA256 `e8ed25eb5dc8855b89eb4f2fdf2bb1a85c2d8b414460dfb7bdbcecb0640b21c6`。来源清单 `parent-baseline-rp3-parent-796b980a-manifest.json`；依赖均来自同一父提交，LF/CRLF差异见 `parent-baseline-line-ending-comparison.json`，未更改快照字节。
+
+- 父基线10行为红：A1、mixed A2、R2真实16上传、A3、A4四项、A7、R3 open尾段；无前置解析红。
+- 11控制绿：A5、R1四项、A6三项、A8、R3登记失败、A9。A9确实消费RP2入口变量并在父基线执行，不是当前源码冒充。
+- `source-copy-manifest.json` SHA256：`35f13f552930b14bd4d99984d2d42d13bebf32af789a6c9ac4d99364d187d47b`。`review-protection-1789887632360.json`证明审后登记前617 tracked+1 untracked在源/副本1236次hash比对零差异。
+- 当前service SHA256：`bb7224bd91aa8b96d916918208c57e4cba98699a0882c8b61649a32edfd6fc40`。dispose测试本机CRLF字节hash为 `c836cbf23f78db8edebb650dd920d8f2ab1be0bb8fcbc0f4b928b688f6af06d2`；LF归一对应旧报告 `0759ee92…`，不误判业务差异。
+
+### 保留边界与非阻断订正
+
+N1：进度文案曾将首轮mixed红例误写为16真实上传方向。首轮mixed为8 ready上传+8 pending下载后的第9次getObject，16真实上传方向由round1 R2独立补测；主会话已订正进度文案，不影响A2/R2通过。
+
+旧 `tmp/dsk-004-rp3-coder-20260919T015354Z/` 本机实际不存在；本次Git父基线新对照不等于恢复旧日志，不追认旧快照hash或历史失败归因。历史npm偶发失败原因仍未证实，本次558全绿不能证明其“非回归”。
+
+A4/A6结合已运行场景及共同调用链，不声称穷举所有方向×取消原因。open屏障是包装器调用边界，释放后执行真实open/close，非OS内核挂起；登记失败为明确注入，非真实SQLite锁竞争。
+
+未重跑SQLite gate、build/prepare、桌面脚本；RP1/RP2既有状态保留。原生UI、Windows11、断电及安装包未验收；不推进RP4，不将DSK-004整体标为PASS。以下旧记录保持其当时语境，证据声明不等于本机已恢复原件。
 
 ## 实际缺陷（修前核实）
 

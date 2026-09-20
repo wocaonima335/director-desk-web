@@ -62,6 +62,34 @@ if (typeof state.rmRejectCalls !== 'number') state.rmRejectCalls = 0;
 if (typeof state.openCalls !== 'number') state.openCalls = 0;
 if (typeof state.proxiedHandles !== 'number') state.proxiedHandles = 0;
 if (typeof state.handleCloses !== 'number') state.handleCloses = 0;
+// RP4 additions (all inert unless armed by a test): proxied-handle stat/read/write counting
+// and policies, forced REAL short reads, readFile counting. Uniform instrumentation: the same
+// counters work against older production sources, so red runs measure real behavior.
+if (typeof state.readChunkCap !== 'number') state.readChunkCap = 0;
+if (typeof state.handleStats !== 'number') state.handleStats = 0;
+if (typeof state.statGate !== 'undefined') { /* keep */ } else state.statGate = null;
+if (typeof state.handleReads !== 'number') state.handleReads = 0;
+if (!Array.isArray(state.handleReadRequests)) state.handleReadRequests = [];
+if (!Array.isArray(state.handleReadGot)) state.handleReadGot = [];
+if (!Array.isArray(state.readGateQueue)) state.readGateQueue = [];
+if (!Array.isArray(state.readArrivals)) state.readArrivals = [];
+if (typeof state.readRejectRemaining !== 'number') state.readRejectRemaining = 0;
+if (typeof state.writeCalls !== 'number') state.writeCalls = 0;
+if (typeof state.writePartialRemaining !== 'number') state.writePartialRemaining = 0;
+if (typeof state.writeRejectRemaining !== 'number') state.writeRejectRemaining = 0;
+if (typeof state.closeFailRemaining !== 'number') state.closeFailRemaining = 0;
+if (typeof state.closeHangMs !== 'number') state.closeHangMs = 0;
+if (typeof state.readFileCalls !== 'number') state.readFileCalls = 0;
+if (typeof state.readFileBytes !== 'number') state.readFileBytes = 0;
+if (typeof state.readFileGateMatch !== 'undefined') { /* keep */ } else state.readFileGateMatch = null;
+if (typeof state.readFileGate !== 'undefined') { /* keep */ } else state.readFileGate = null;
+if (typeof state.readFileRejectRemaining !== 'number') state.readFileRejectRemaining = 0;
+function rp4Simulated(kind, target) {
+    const error = new Error('[rp1-fsp-gate] SIMULATED ' + kind + ' failure injected by the test (not a real OS error): ' + target);
+    error.code = 'EIO';
+    error.simulated = true;
+    return error;
+}
 function gated(kind, args, call) {
     const match = kind === 'rm' ? state.rmMatch : state.mkdirMatch;
     const done = kind === 'rm' ? 'rmMatched' : 'mkdirMatched';
@@ -89,7 +117,54 @@ module.exports = {
                     if (prop === 'close') {
                         return async () => {
                             state.handleCloses = (state.handleCloses || 0) + 1;
+                            if (state.closeFailRemaining > 0) {
+                                if (state.closeFailRemaining !== Infinity) state.closeFailRemaining -= 1;
+                                throw rp4Simulated('handle.close', 'closeFailRemaining policy');
+                            }
+                            if (state.closeHangMs > 0) await new Promise(resolve => setTimeout(resolve, state.closeHangMs));
                             return target.close();
+                        };
+                    }
+                    if (prop === 'stat') {
+                        return async () => {
+                            state.handleStats = (state.handleStats || 0) + 1;
+                            if (state.statGate) await state.statGate;
+                            return target.stat();
+                        };
+                    }
+                    if (prop === 'read') {
+                        return async (buffer, offset, length, position) => {
+                            state.handleReads = (state.handleReads || 0) + 1;
+                            state.handleReadRequests.push(length);
+                            if (state.readGateQueue.length) {
+                                const arrival = state.readArrivals.shift();
+                                if (arrival) arrival();
+                                await state.readGateQueue.shift();
+                            }
+                            if (state.readRejectRemaining > 0) {
+                                state.readRejectRemaining -= 1;
+                                throw rp4Simulated('handle.read', 'readRejectRemaining policy');
+                            }
+                            // readChunkCap forces a REAL short read through the real handle.
+                            const want = state.readChunkCap > 0 ? Math.min(length, state.readChunkCap) : length;
+                            const result = await target.read(buffer, offset, want, position);
+                            state.handleReadGot.push(result.bytesRead);
+                            return result;
+                        };
+                    }
+                    if (prop === 'write') {
+                        return async (buffer, offset, length, position) => {
+                            state.writeCalls = (state.writeCalls || 0) + 1;
+                            if (state.writeRejectRemaining > 0) {
+                                state.writeRejectRemaining -= 1;
+                                throw rp4Simulated('handle.write', 'writeRejectRemaining policy');
+                            }
+                            if (state.writePartialRemaining > 0) {
+                                state.writePartialRemaining -= 1;
+                                const total = typeof length === 'number' ? length : buffer.length;
+                                return target.write(buffer, typeof offset === 'number' ? offset : 0, Math.max(1, Math.floor(total / 2)), position ?? null);
+                            }
+                            return target.write(buffer, offset, length, position);
                         };
                     }
                     const value = Reflect.get(target, prop);
@@ -98,6 +173,22 @@ module.exports = {
             });
         }
         return handle;
+    },
+    readFile(...args) {
+        state.readFileCalls = (state.readFileCalls || 0) + 1;
+        const proceed = async () => {
+            const result = await real.readFile(...args);
+            state.readFileBytes = (state.readFileBytes || 0) + result.length;
+            return result;
+        };
+        if (typeof state.readFileGateMatch === 'function' && state.readFileGateMatch(...args)) {
+            if (state.readFileGate) return state.readFileGate.then(proceed);
+        }
+        if (state.readFileRejectRemaining > 0) {
+            state.readFileRejectRemaining -= 1;
+            return Promise.reject(rp4Simulated('fs/promises.readFile', 'readFileRejectRemaining policy'));
+        }
+        return proceed();
     },
     rm(...args) {
         state.rmCalls += 1;
@@ -136,6 +227,59 @@ async function buildGatedService(entry) {
     await esbuild.build({
         entryPoints: [entry], outfile, bundle: true, platform: 'node', format: 'cjs',
         charset: 'utf8', external: ['electron'], logLevel: 'silent', plugins: [fspGatePlugin()],
+    });
+    process.on('exit', () => { try { fs.rmSync(outfile, { force: true }); } catch { /* best effort */ } });
+    return require(outfile);
+}
+
+// RP4: counting pass-through for the CALLBACK fs module (fs.read/fs.readSync). Older streaming
+// code (fsSync.ReadStream) requests 1MiB-sized reads through this module, while the RP4 bounded
+// core reads through proxied fs/promises handles — counting BOTH gives one uniform 64KiB
+// request-budget measurement that works identically against old and new production sources.
+// Counting only: every call passes straight through, so unarmed runs are unaffected.
+const RP4_FS_WRAPPER = `
+const real = require('fs');
+const state = globalThis.__rp4FsCounts || { syncReads: 0, syncReadRequests: [] };
+globalThis.__rp4FsCounts = state;
+function requestLength(args) {
+    if (args.length >= 2 && args[1] && typeof args[1] === 'object' && !Buffer.isBuffer(args[1]) && typeof args[1].length === 'number') return args[1].length;
+    return typeof args[3] === 'number' ? args[3] : -1;
+}
+// Copy every enumerable export of the real fs module (CJS interop only sees own properties,
+// so a prototype-only fallback would hide mkdirSync and friends from bundled consumers).
+module.exports = Object.assign({}, real, {
+    read(...args) { state.syncReads += 1; state.syncReadRequests.push(requestLength(args)); return real.read(...args); },
+    readSync(...args) { state.syncReads += 1; state.syncReadRequests.push(requestLength(args)); return real.readSync(...args); },
+});
+`;
+
+function rp4FsCountPlugin() {
+    return {
+        name: 'rp4-fs-count',
+        setup(build) {
+            build.onResolve({ filter: /^(node:)?fs$/ }, args => {
+                // The wrapper module itself must reach the REAL fs: let its own require fall
+                // through to the default (external builtin) resolution.
+                if (args.importer === 'rp4-fs-count') return null;
+                return { path: 'rp4-fs-count', namespace: 'rp4-fs-count' };
+            });
+            build.onLoad({ filter: /.*/, namespace: 'rp4-fs-count' }, () => ({ contents: RP4_FS_WRAPPER, loader: 'js', resolveDir: repo }));
+        },
+    };
+}
+
+/** RP4: bundle builder with the fsp gate wrapper and/or the fs read-count wrapper. nodePaths
+ * lets red runs resolve node_modules (zod) against the WORKSPACE copy while the entry lives in
+ * the frozen pre-task snapshot (which carries no node_modules of its own). */
+async function buildRp4Bundle(entry, { fspGate = false, fsCount = false } = {}) {
+    const outfile = path.join(repo, 'tmp', `dsk-rp4-bundle-${process.pid}-${bundleSeq++}.cjs`);
+    const plugins = [];
+    if (fspGate) plugins.push(fspGatePlugin());
+    if (fsCount) plugins.push(rp4FsCountPlugin());
+    await esbuild.build({
+        entryPoints: [entry], outfile, bundle: true, platform: 'node', format: 'cjs',
+        charset: 'utf8', external: ['electron'], logLevel: 'silent', plugins,
+        nodePaths: [path.join(repo, 'node_modules')],
     });
     process.on('exit', () => { try { fs.rmSync(outfile, { force: true }); } catch { /* best effort */ } });
     return require(outfile);
@@ -3244,5 +3388,867 @@ test('RP3 R3: a real db.commitSnapshot registration failure releases the transfe
         assertPermits(svc, 0, 'the successful retry released its permit at the arbitration point');
     } finally {
         await svc.dispose({ timeoutMs: 3000 });
+    }
+});
+
+// =====================================================================================
+// DSK-004-RP4: bounded reads on every authorized path (objects/service full coverage).
+// Named reds are first run against the frozen pre-task snapshot via DSK_RP4_SERVICE_ENTRY /
+// DSK_RP4_OBJECTS_ENTRY (same technique as RP2/RP3): the pre-fix sources already consumed the
+// constructor DI and real paths used here, so a red run exercises the REAL old behavior —
+// never a new-DI-shaped fake red. All wrapper arming is inert unless a test arms it, and every
+// gate is released in a finally block. Uniform instrumentation (proxied-handle stat/read/
+// write/close counting and policies, forced REAL short reads via a real-handle length cap,
+// readFile counting, callback-fs read counting) measures the SAME production behavior on old
+// and new sources, so reds are behavioral outcomes or real I/O measurements — never a missing
+// method, a parse error, or a harness precondition. Telemetry-only assertions are guarded
+// (skipped when the hook is absent on the snapshot) instead of faking a red.
+// =====================================================================================
+
+const RP4_SERVICE_ENTRY = process.env.DSK_RP4_SERVICE_ENTRY
+    ? path.resolve(process.env.DSK_RP4_SERVICE_ENTRY)
+    : path.join(repo, 'desktop', 'storage', 'service.cjs');
+const RP4_OBJECTS_ENTRY = process.env.DSK_RP4_OBJECTS_ENTRY
+    ? path.resolve(process.env.DSK_RP4_OBJECTS_ENTRY)
+    : path.join(repo, 'desktop', 'storage', 'objects.cjs');
+// RP4 entry coverage: the PLAIN service bundle (no wrappers) and the GATED service bundle
+// (fsp gate + fs counting) are both built from the SAME entry — during a red run that entry is
+// the frozen pre-task snapshot, so both esbuild entry shapes exercise real pre-fix production.
+const rp4PlainServicePromise = buildRp4Bundle(RP4_SERVICE_ENTRY, {});
+const rp4GatedServicePromise = buildRp4Bundle(RP4_SERVICE_ENTRY, { fspGate: true, fsCount: true });
+const rp4GatedObjectsPromise = buildRp4Bundle(RP4_OBJECTS_ENTRY, { fspGate: true, fsCount: true });
+
+const RP4_DELAY = ms => new Promise(resolve => setTimeout(resolve, ms));
+function rp4Gates() { return globalThis.__rp1FspGates; }
+function rp4Arm(patch) { const gates = rp4Gates(); for (const [key, value] of Object.entries(patch)) gates[key] = value; }
+function rp4Disarm() {
+    const gates = rp4Gates();
+    gates.openProxyMatch = null;
+    gates.openMatch = null;
+    gates.readChunkCap = 0;
+    gates.readGateQueue = [];
+    gates.readArrivals = [];
+    gates.readRejectRemaining = 0;
+    gates.writePartialRemaining = 0;
+    gates.writeRejectRemaining = 0;
+    gates.closeFailRemaining = 0;
+    gates.closeHangMs = 0;
+    gates.statGate = null;
+    gates.readFileGateMatch = null;
+    gates.readFileGate = null;
+    gates.readFileRejectRemaining = 0;
+}
+async function rp4WaitUntil(predicate, timeoutMs = 3000, label = 'condition') {
+    for (let waited = 0; waited < timeoutMs && !predicate(); waited += 5) await RP4_DELAY(5);
+    if (!predicate()) console.log(`RP4 harness note: bounded wait for "${label}" expired after ${timeoutMs}ms`);
+    return predicate();
+}
+function rp4ReadStats(store) {
+    return store && typeof store._readStats === 'function' ? store._readStats() : null;
+}
+function rp4ReadSessions(store) {
+    return store && typeof store._readSessionLog === 'function' ? store._readSessionLog() : null;
+}
+function rp4Verifiers(contracts) {
+    return { document: contracts.assertSceneDocument, canonical: contracts.canonicalJson, manifest: contracts.BackupManifestSchema };
+}
+
+/** RP4 service harness: the service creates its OWN store (production close-owner wiring).
+ * gated=false uses the plain bundle (no wrappers); default is the gated bundle with counting. */
+async function makeRp4Service({ label, dialog, wrapLibrary, injected, gated = true } = {}) {
+    const contracts = await contractsPromise;
+    const { createStorageService } = await (gated ? rp4GatedServicePromise : rp4PlainServicePromise);
+    const root = freshRoot(label ?? 'rp4');
+    const clock = { value: Date.now() };
+    const options = { root, verifiers: rp4Verifiers(contracts), now: () => clock.value, dialog: dialog ?? null };
+    if (injected) options.objects = injected;
+    if (wrapLibrary) {
+        const { openLibrary } = await libraryPromise;
+        const realLibrary = openLibrary({ file: path.join(root, 'library.sqlite'), now: () => clock.value });
+        options.library = wrapLibrary(realLibrary);
+    }
+    const svc = createStorageService(options);
+    const frame = { sender: { id: 7300 }, senderFrame: { url: 'director://app/rp4' } };
+    const call = (action, data, withFrame) => svc.runInRequestContext(withFrame ?? frame, () => svc.handlers[action](data));
+    return { svc, call, root, clock, frame, contracts, store: svc._internal.store };
+}
+
+test('RP4 A1 red: invalid and over-budget limits are refused before the file is opened and cost zero content reads; an oversize handle is refused at the post-open fstat barrier', async () => {
+    const { createObjectStore } = await rp4GatedObjectsPromise;
+    const root = freshRoot('rp4-a1');
+    const store = createObjectStore({ root });
+    const bytes = Buffer.alloc(500, 3);
+    const { digest } = await store.putObject('proj-rp4a1', bytes);
+    const objectPath = path.join(root, 'projects', 'proj-rp4a1', 'objects', `${digest}.json`);
+    try {
+        rp4Arm({ openProxyMatch: candidate => candidate === objectPath });
+        for (const bad of [-1, NaN, 1.5, 100 * 1024 * 1024, 64 * 1024 * 1024 + 1]) {
+            const gates = rp4Gates();
+            const readsBefore = gates.handleReads;
+            const opensBefore = gates.openCalls;
+            await assert.rejects(() => store.getObject('proj-rp4a1', digest, bad),
+                error => error.reason === 'corrupt-object',
+                `limit ${bad} must be refused with the corrupt-object reason`);
+            assert.equal(gates.handleReads - readsBefore, 0, `limit ${bad} must cost ZERO content read requests`);
+            assert.equal(gates.openCalls - opensBefore, 0, `limit ${bad} must be refused before the file is opened`);
+        }
+        // Post-open fstat barrier: a file that grows between lstat and handle.stat is refused
+        // with zero content reads. Pre-fix production never calls handle.stat: the read starts
+        // immediately and SUCCEEDS — a behavioral red at the same instrumentation.
+        rp4Disarm();
+        let releaseStat;
+        const statGate = new Promise(resolve => { releaseStat = resolve; });
+        rp4Arm({ statGate, openProxyMatch: candidate => candidate === objectPath });
+        const gates = rp4Gates();
+        const readsBefore = gates.handleReads;
+        const statsBefore = gates.handleStats;
+        const pending = store.getObject('proj-rp4a1', digest, 500);
+        const fstatReached = await rp4WaitUntil(() => gates.handleStats > statsBefore, 2000, 'post-open fstat barrier');
+        if (fstatReached) fs.writeFileSync(objectPath, Buffer.alloc(1000, 4)); // grow past the declaration
+        releaseStat();
+        if (fstatReached) {
+            await assert.rejects(() => pending, error => error.reason === 'corrupt-object',
+                'the grown handle must be refused at the fstat barrier');
+            assert.equal(gates.handleReads - readsBefore, 0, 'an initially oversize handle must cost zero content reads');
+            const sessions = rp4ReadSessions(store);
+            if (sessions) {
+                const trace = sessions[sessions.length - 1];
+                assert.equal(trace.fstatCalls, 1);
+                assert.equal(trace.readCalls, 0);
+                assert.deepEqual(trace.order.slice(0, 3), ['lstat', 'open', 'fstat'], 'phases must run lstat -> open -> fstat before any read');
+            }
+        } else {
+            const outcome = await pending.then(() => 'resolved-successfully', error => `rejected:${error.reason ?? error}`);
+            assert.fail(`PRE-FIX BEHAVIORAL RED: no post-open fstat barrier exists — the grown file was consumed without a handle.stat refusal (outcome: ${outcome})`);
+        }
+    } finally {
+        rp4Disarm();
+    }
+});
+
+test('RP4 A2 red: legal forced REAL short reads still read completely with the exact hash — get, idempotent put-verify and copyObject all succeed', async () => {
+    const { createObjectStore } = await rp4GatedObjectsPromise;
+    const root = freshRoot('rp4-a2');
+    const store = createObjectStore({ root });
+    const bytes = Buffer.alloc(5000, 11);
+    const { digest } = await store.putObject('proj-rp4a2', bytes);
+    const objectPath = path.join(root, 'projects', 'proj-rp4a2', 'objects', `${digest}.json`);
+    try {
+        rp4Arm({ openProxyMatch: candidate => candidate === objectPath, readChunkCap: 512 });
+        const gates = rp4Gates();
+        const readsBefore = gates.handleReads;
+        const read = await store.getObject('proj-rp4a2', digest, 5000);
+        assert.ok(read.equals(bytes), 'PRE-FIX BEHAVIORAL RED: a forced real short read returned truncated bytes — the whole 5000 must be delivered');
+        assert.equal(store.sha256Hex(read), digest, 'the digest must match under forced short reads');
+        const requests = gates.handleReadRequests.slice(readsBefore);
+        assert.ok(requests.length >= 2, `several short read requests expected, got ${requests.length}`);
+        for (const request of requests) {
+            assert.ok(request <= 65536, `every request must stay within the 64KiB internal block (got ${request})`);
+        }
+        const reputc = await store.putObject('proj-rp4a2', bytes);
+        assert.equal(reputc.digest, digest, 'the idempotent re-put must succeed through the bounded existing-name verify');
+        await store.copyObject('proj-rp4a2', 'proj-rp4a2-copy', digest, 5000);
+        const copied = await store.getObject('proj-rp4a2-copy', digest, 5000);
+        assert.ok(copied.equals(bytes), 'copyObject delegates to the same bounded core');
+        const sessions = rp4ReadSessions(store);
+        if (sessions) {
+            const trace = sessions.find(item => item.label === '登记的对象文件' && item.limit === 5000);
+            assert.ok(trace, 'the read session telemetry must be recorded');
+            let cumulative = 0;
+            for (const entry of trace.requests) {
+                const remaining = 5001 - (entry.cumulative - entry.got);
+                assert.ok(entry.request <= Math.min(65536, remaining), `request ${entry.request} must not exceed min(64KiB, remaining+1)`);
+                assert.ok(entry.got <= entry.request, 'a real short read never returns more than requested');
+                cumulative = entry.cumulative;
+            }
+            assert.equal(cumulative, 5000);
+            assert.equal(trace.delivered, 5000);
+            assert.deepEqual(trace.close, { ok: true });
+        }
+    } finally {
+        rp4Disarm();
+    }
+});
+
+test('RP4 A3 red: the post-open fstat precedes the first content read; a file truncated mid-read is refused; cumulative real reads stay within limit+1', async () => {
+    const { createObjectStore } = await rp4GatedObjectsPromise;
+    const root = freshRoot('rp4-a3');
+    const store = createObjectStore({ root });
+    const bytes = Buffer.alloc(200, 21);
+    const { digest } = await store.putObject('proj-rp4a3', bytes);
+    const objectPath = path.join(root, 'projects', 'proj-rp4a3', 'objects', `${digest}.json`);
+    // (a) ordering: handle.stat counted before the first content read on a successful read.
+    try {
+        rp4Arm({ openProxyMatch: candidate => candidate === objectPath });
+        const gates = rp4Gates();
+        const statsBefore = gates.handleStats;
+        const readsBefore = gates.handleReads;
+        const read = await store.getObject('proj-rp4a3', digest, 200);
+        assert.ok(read.equals(bytes));
+        assert.equal(gates.handleStats - statsBefore, 1, 'PRE-FIX BEHAVIORAL RED: the successful read never called handle.stat');
+        assert.ok(gates.handleReads - readsBefore >= 1, 'the content read must be observable');
+        const sessions = rp4ReadSessions(store);
+        if (sessions) {
+            const trace = sessions[sessions.length - 1];
+            assert.deepEqual(trace.order, ['lstat', 'open', 'fstat', 'read', 'close'], 'phase order must be lstat -> open -> fstat -> read -> close');
+            for (const entry of trace.requests) {
+                const remaining = 201 - (entry.cumulative - entry.got);
+                assert.ok(entry.request <= Math.min(65536, remaining), `request ${entry.request} must not exceed min(64KiB, limit+1-totalRead)`);
+                assert.ok(entry.got <= entry.request, 'a real short read never returns more than requested');
+            }
+            assert.ok(trace.readBytes <= 201, `actually read bytes must stay within limit+1 (got ${trace.readBytes})`);
+            assert.equal(trace.delivered, 200);
+        }
+    } finally {
+        rp4Disarm();
+    }
+    // (b) truncation during a parked partial read: refused, never trusted as full content.
+    {
+        let releaseRead;
+        const readGate = new Promise(resolve => { releaseRead = resolve; });
+        rp4Arm({ openProxyMatch: candidate => candidate === objectPath, readChunkCap: 64, readGateQueue: [readGate] });
+        try {
+            const pending = store.getObject('proj-rp4a3', digest, 200);
+            const engaged = await rp4WaitUntil(() => rp4Gates().handleReads >= 1, 2000, 'parked first read');
+            assert.ok(engaged, 'the first short read must be reachable');
+            fs.writeFileSync(objectPath, bytes.subarray(0, 30)); // truncate mid-read
+            releaseRead();
+            const failure = await pending.then(() => null, error => error);
+            assert.ok(failure, 'a file truncated mid-read must not be delivered as full content');
+            assert.equal(failure.reason, 'corrupt-object', `unexpected failure: ${failure && failure.message}`);
+            const sessions = rp4ReadSessions(store);
+            if (sessions) {
+                const trace = sessions[sessions.length - 1];
+                assert.equal(trace.totalRead, 30, `the bytes actually read must be traceable (got ${trace.totalRead})`);
+                assert.ok(trace.totalRead <= 201, 'cumulative real reads stay within limit+1 even after truncation');
+            }
+        } finally {
+            releaseRead();
+            rp4Disarm();
+        }
+    }
+});
+
+test('RP4 A4: the real snapshot.read reaches the bounded read core; a tampered same-name object is never overwritten; put/get reuse and verify stay intact', async () => {
+    const { svc, call, store, root } = await makeRp4Service({ label: 'rp4-a4', gated: false });
+    try {
+        const created = await call('project.create', { name: 'RP4A4' });
+        const sessionId = created.data.sessionId;
+        const document = await sampleDoc('RP4A4快照');
+        const commit = await uploadDocument({ call, sessionId }, document, {});
+        assert.equal(commit.ok, true, JSON.stringify(commit.error ?? {}));
+        const digest = commit.data.snapshot.digest;
+        const sessionsBefore = rp4ReadSessions(store)?.length ?? 0;
+        const read = await call('storage.v1.snapshot.read', { sessionId });
+        assert.equal(read.ok, true, JSON.stringify(read.error ?? {}));
+        let payload = Buffer.alloc(0);
+        for (let index = 0; index < 64; index += 1) {
+            const chunk = await call('storage.v1.snapshot.download.chunk', { transferId: read.data.transferId });
+            assert.equal(chunk.ok, true, JSON.stringify(chunk.error ?? {}));
+            payload = Buffer.concat([payload, Buffer.from(chunk.data.data, 'base64')]);
+            if (chunk.data.final) break;
+        }
+        assert.equal(payload.length, read.data.length);
+        assert.equal(store.sha256Hex(payload), digest, 'the download must reassemble to the exact published bytes');
+        const sessionsAfter = rp4ReadSessions(store);
+        if (sessionsAfter) {
+            assert.ok(sessionsAfter.length > sessionsBefore, 'the real snapshot.read must register a bounded read session');
+            const trace = sessionsAfter[sessionsAfter.length - 1];
+            assert.equal(trace.label, '登记的对象文件');
+            assert.ok(trace.fstatCalls >= 1, 'the download read must pass the post-open fstat barrier');
+            assert.ok(trace.readCalls >= 1);
+        }
+        // A tampered same-length object is reported corrupt and never overwritten.
+        const objectPath = path.join(root, 'projects', created.data.projectId, 'objects', `${digest}.json`);
+        const original = fs.readFileSync(objectPath);
+        fs.writeFileSync(objectPath, Buffer.alloc(original.length, 0x7f));
+        const status = await call('project.status', { projectId: created.data.projectId });
+        assert.equal(status.data.integrity.corrupt, 1, 'the tampered object must be reported corrupt');
+        fs.writeFileSync(objectPath, original);
+        const recommit = await uploadDocument({ call, sessionId }, document, { expectedRevision: commit.data.revision });
+        assert.equal(recommit.ok, true, `re-saving identical content must succeed through the bounded existing-name verify: ${JSON.stringify(recommit.error ?? {})}`);
+    } finally {
+        rp4Disarm();
+        await svc.dispose({ timeoutMs: 5000 });
+    }
+});
+
+test('RP4 A5 red: the upload-commit tmp read is bounded (growth never fully buffered, never readFile) and a genuine tmp-handle close failure fails the commit', async () => {
+    // (a) growth: bytes appended past the declared length must never be fully buffered.
+    {
+        const growth = await makeRp4Service({ label: 'rp4-a5-growth' });
+        const { svc, call, root } = growth;
+        try {
+            const created = await call('project.create', { name: 'RP4A5a' });
+            const sessionId = created.data.sessionId;
+            const document = await sampleDoc('RP4A5增长');
+            const bytes = Buffer.from(JSON.stringify(document), 'utf8');
+            const begin = await call('storage.v1.upload.begin', { sessionId, expectedRevision: 0, declaredLength: bytes.length });
+            assert.equal(begin.ok, true, JSON.stringify(begin.error ?? {}));
+            const { transferId, chunkSize } = begin.data;
+            for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+                const slice = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+                const chunk = await call('storage.v1.upload.chunk', { transferId, offset, data: slice.toString('base64') });
+                assert.equal(chunk.ok, true);
+            }
+            const partPath = path.join(root, 'uploads', `${transferId}.part`);
+            const gates = rp4Gates();
+            const rfBefore = gates.readFileCalls;
+            const rbBefore = gates.readFileBytes;
+            fs.appendFileSync(partPath, Buffer.alloc(40, 0x21)); // grow past the declared length
+            const commit = await call('storage.v1.upload.commit', { transferId });
+            assert.equal(commit.ok, false, 'a tmp file grown past its declaration must not commit');
+            assert.equal(commit.error.message, 'storage.v1/upload-format', JSON.stringify(commit.error ?? {}));
+            assert.equal(gates.readFileCalls - rfBefore, 0, 'the tmp read must go through the bounded core, never fsp.readFile');
+            assert.equal(gates.readFileBytes - rbBefore, 0,
+                'PRE-FIX BEHAVIORAL RED: the upload commit buffered the GROWN tmp file with an unbounded fsp.readFile');
+            const status = await call('project.status', { projectId: created.data.projectId });
+            assert.equal(status.data.revision, 0, 'the failed commit must leave the pointer unmoved');
+            await RP4_DELAY(60);
+            const uploadsDir = path.join(root, 'uploads');
+            const leftovers = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir).filter(name => name.endsWith('.part')) : [];
+            assert.deepEqual(leftovers, [], 'the cancelled upload must not leave a .part file');
+        } finally {
+            rp4Disarm();
+            await svc.dispose({ timeoutMs: 5000 });
+        }
+    }
+    // (b) truncation before commit: refused with the pointer unmoved (control on both).
+    {
+        const trunc = await makeRp4Service({ label: 'rp4-a5-trunc' });
+        const { svc, call, root } = trunc;
+        try {
+            const created = await call('project.create', { name: 'RP4A5b' });
+            const sessionId = created.data.sessionId;
+            const document = await sampleDoc('RP4A5截断');
+            const bytes = Buffer.from(JSON.stringify(document), 'utf8');
+            const begin = await call('storage.v1.upload.begin', { sessionId, expectedRevision: 0, declaredLength: bytes.length });
+            assert.equal(begin.ok, true);
+            const { transferId, chunkSize } = begin.data;
+            for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+                const slice = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+                const chunk = await call('storage.v1.upload.chunk', { transferId, offset, data: slice.toString('base64') });
+                assert.equal(chunk.ok, true);
+            }
+            fs.writeFileSync(path.join(root, 'uploads', `${transferId}.part`), bytes.subarray(0, Math.floor(bytes.length / 2)));
+            const commit = await call('storage.v1.upload.commit', { transferId });
+            assert.equal(commit.ok, false, 'a truncated tmp must not commit');
+            assert.equal(commit.error.message, 'storage.v1/upload-format', JSON.stringify(commit.error ?? {}));
+            const status = await call('project.status', { projectId: created.data.projectId });
+            assert.equal(status.data.revision, 0);
+        } finally {
+            rp4Disarm();
+            await svc.dispose({ timeoutMs: 5000 });
+        }
+    }
+    // (c) forced real short reads during the commit tmp read still commit (control on both).
+    {
+        const short = await makeRp4Service({ label: 'rp4-a5-short' });
+        const { svc, call } = short;
+        try {
+            const created = await call('project.create', { name: 'RP4A5c' });
+            const sessionId = created.data.sessionId;
+            const document = await sampleDoc('RP4A5短读');
+            const bytes = Buffer.from(JSON.stringify(document), 'utf8');
+            const begin = await call('storage.v1.upload.begin', { sessionId, expectedRevision: 0, declaredLength: bytes.length });
+            assert.equal(begin.ok, true);
+            const { transferId, chunkSize } = begin.data;
+            for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+                const slice = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+                const chunk = await call('storage.v1.upload.chunk', { transferId, offset, data: slice.toString('base64') });
+                assert.equal(chunk.ok, true);
+            }
+            rp4Arm({ openProxyMatch: candidate => candidate.endsWith('.part'), readChunkCap: 512 });
+            const commit = await call('storage.v1.upload.commit', { transferId });
+            assert.equal(commit.ok, true, `forced real short reads during the tmp read must still commit: ${JSON.stringify(commit.error ?? {})}`);
+            const status = await call('project.status', { projectId: created.data.projectId });
+            assert.equal(status.data.revision, 1);
+        } finally {
+            rp4Disarm();
+            await svc.dispose({ timeoutMs: 5000 });
+        }
+    }
+    // (d) close failure: the commit must NOT be swallowed into a success. The arm happens
+    // BEFORE upload.begin so the .part write handle itself is proxied.
+    {
+        const closeFail = await makeRp4Service({ label: 'rp4-a5-close' });
+        const { svc, call, root } = closeFail;
+        try {
+            rp4Arm({ openProxyMatch: candidate => candidate.endsWith('.part'), closeFailRemaining: 1 });
+            const created = await call('project.create', { name: 'RP4A5d' });
+            const sessionId = created.data.sessionId;
+            const document = await sampleDoc('RP4A5关闭');
+            const bytes = Buffer.from(JSON.stringify(document), 'utf8');
+            const begin = await call('storage.v1.upload.begin', { sessionId, expectedRevision: 0, declaredLength: bytes.length });
+            assert.equal(begin.ok, true);
+            const { transferId, chunkSize } = begin.data;
+            for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+                const slice = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+                const chunk = await call('storage.v1.upload.chunk', { transferId, offset, data: slice.toString('base64') });
+                assert.equal(chunk.ok, true);
+            }
+            const commit = await call('storage.v1.upload.commit', { transferId });
+            assert.equal(commit.ok, false, 'PRE-FIX BEHAVIORAL RED: a genuine tmp-handle close failure must not be swallowed into a commit');
+            assert.equal(commit.error.message, 'storage.v1/io-failure', JSON.stringify(commit.error ?? {}));
+            const status = await call('project.status', { projectId: created.data.projectId });
+            assert.equal(status.data.revision, 0, 'the refused commit must leave the pointer unmoved');
+            rp4Disarm();
+            const drain = await svc.dispose({ timeoutMs: 8000 });
+            assert.equal(drain.ok, true, `the single-owner retry must really close the handle and finish: ${JSON.stringify(drain)}`);
+            assert.equal(svc._internal.dbOpen(), false, 'the database must close once the resource is really accounted for');
+            const uploadsDir = path.join(root, 'uploads');
+            const leftovers = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir).filter(name => name.endsWith('.part')) : [];
+            assert.deepEqual(leftovers, [], 'no .part file may survive the resolved drain');
+        } finally {
+            rp4Disarm();
+        }
+    }
+});
+
+test('RP4 A6 red: streaming export requests stay within the 64KiB block; partial writes still verify; a sink write failure removes its own target and never publishes', async () => {
+    const { createObjectStore } = await rp4GatedObjectsPromise;
+    const root = freshRoot('rp4-a6');
+    const store = createObjectStore({ root });
+    const bytes = Buffer.alloc(200000, 9);
+    const { digest } = await store.putObject('proj-rp4a6', bytes);
+    const sourcePath = path.join(root, 'projects', 'proj-rp4a6', 'objects', `${digest}.json`);
+    const dest = path.join(root, 'export.bin');
+    try {
+        // (a) full export under forced real short reads; the source must be opened through the
+        // counted bounded-read layer and every counted request must stay within 64KiB.
+        rp4Arm({ openProxyMatch: candidate => candidate === sourcePath, readChunkCap: 32768 });
+        const proxiesBefore = rp4Gates().proxiedHandles;
+        const handleBefore = rp4Gates().handleReadRequests.length;
+        const exported = await store.streamObjectToFile('proj-rp4a6', digest, 200000, dest);
+        assert.deepEqual(exported, { digest, length: 200000 });
+        if (rp4Gates().proxiedHandles - proxiesBefore === 0) {
+            assert.fail('PRE-FIX BEHAVIORAL RED: the streaming export bypassed the bounded-read layer entirely — the source was never opened through the counted fsp.open, so there is no post-open handle.stat barrier and no per-request 64KiB budget (the pre-fix ReadStream reads up to 1MiB per internal read)');
+        }
+        const handleRequests = rp4Gates().handleReadRequests.slice(handleBefore);
+        assert.ok(handleRequests.length >= 3, `multiple block requests expected, got ${handleRequests.length}`);
+        for (const request of handleRequests) {
+            assert.ok(request <= 65536, `every request must stay within the 64KiB internal block (got ${request})`);
+        }
+        assert.equal(store.sha256Hex(fs.readFileSync(dest)), digest, 'the exported bytes must hash identically');
+        const sessions = rp4ReadSessions(store);
+        if (sessions) {
+            const trace = sessions[sessions.length - 1];
+            assert.equal(trace.label, '备份对象流式导出');
+            assert.equal(trace.delivered, 200000);
+            assert.equal(trace.fstatCalls, 1);
+            assert.deepEqual(trace.close, { ok: true });
+        }
+        rp4Disarm();
+        // (b) partial sink writes still produce a verified export (the injection only engages
+        // on proxied handles: the DEST is armed, so pre-fix WriteStream runs pass through).
+        rp4Arm({ openProxyMatch: candidate => candidate === dest, writePartialRemaining: 3 });
+        fs.rmSync(dest, { force: true });
+        const partialWritesBefore = rp4Gates().writeCalls;
+        const partial = await store.streamObjectToFile('proj-rp4a6', digest, 200000, dest);
+        assert.deepEqual(partial, { digest, length: 200000 });
+        assert.equal(store.sha256Hex(fs.readFileSync(dest)), digest, 'partial writes must be completed by the sink loop');
+        // Engagement is asserted, never assumed: the partial-write loop is only real coverage
+        // when the sink write actually went through the counted proxied fsp.open handle.
+        assert.ok(rp4Gates().writeCalls - partialWritesBefore > 0,
+            'the partial-write injection must engage (counted proxied sink writes); zero writes means the sink bypassed the bounded write path');
+        rp4Disarm();
+        // (c) sink write failure: fail, remove THIS request's own target, never publish.
+        // The dest from sub-case (b) must be removed first: the 'wx' open must genuinely reach
+        // the sink, otherwise the injection never engages and this would silently test nothing.
+        fs.rmSync(dest, { force: true });
+        rp4Arm({ openProxyMatch: candidate => candidate === dest, writeRejectRemaining: 2 });
+        const writesBefore = rp4Gates().writeCalls;
+        const failure = await store.streamObjectToFile('proj-rp4a6', digest, 200000, dest).then(() => null, error => error);
+        // Engagement is asserted, never assumed: this branch is only reachable when (a) proved
+        // the export goes through the bounded-read layer, so the sink must be the new proxied
+        // fsp.open path too. Zero counted writes would mean the sink-failure coverage silently
+        // tested nothing (the previous run's silent "did not engage" note is exactly that hole).
+        assert.ok(rp4Gates().writeCalls - writesBefore > 0,
+            'the sink-write injection must engage (counted proxied sink writes); zero writes means the sink bypassed the bounded write path and this coverage silently tested nothing');
+        assert.ok(failure, 'the sink write failure must fail the export');
+        assert.equal(failure.reason, 'io-failure', JSON.stringify(failure && failure.message));
+        assert.equal(fs.existsSync(dest), false, 'the failed export must remove its own target');
+    } finally {
+        rp4Disarm();
+    }
+});
+
+test('RP4 A7 red: an existing import target is verified by a bounded read (never unbounded readFile); tampered targets stay untouched; failures never delete unrelated objects', async () => {
+    const { createObjectStore } = await rp4GatedObjectsPromise;
+    const root = freshRoot('rp4-a7');
+    const store = createObjectStore({ root });
+    const bytes = Buffer.alloc(3000, 17);
+    const { digest } = await store.putObject('proj-rp4a7-src', bytes);
+    const sourcePath = path.join(root, 'projects', 'proj-rp4a7-src', 'objects', `${digest}.json`);
+    try {
+        // (a) new target: bounded stream in.
+        rp4Arm({ openProxyMatch: candidate => candidate === sourcePath });
+        const first = await store.streamFileToObject(sourcePath, 'proj-rp4a7-dst', digest, 3000);
+        assert.deepEqual(first, { digest, length: 3000 });
+        // (b) existing target: bounded verify — no fsp.readFile may be used at all.
+        const gates = rp4Gates();
+        const rfBefore = gates.readFileCalls;
+        const second = await store.streamFileToObject(sourcePath, 'proj-rp4a7-dst', digest, 3000);
+        assert.deepEqual(second, { digest, length: 3000 });
+        assert.equal(gates.readFileCalls - rfBefore, 0,
+            'PRE-FIX BEHAVIORAL RED: the existing-target verify used unbounded fsp.readFile instead of the bounded core');
+        const sessions = rp4ReadSessions(store);
+        if (sessions) {
+            const traces = sessions.filter(item => item.label === '同名对象');
+            assert.ok(traces.length >= 1, 'the existing-target verify must be a bounded read session');
+            assert.equal(traces[traces.length - 1].limit, 3000);
+            assert.ok(traces[traces.length - 1].fstatCalls >= 1);
+        }
+        rp4Disarm();
+        // (c) tampered existing target: refuse and never overwrite (control on both).
+        const targetPath = path.join(root, 'projects', 'proj-rp4a7-dst', 'objects', `${digest}.json`);
+        const good = fs.readFileSync(targetPath);
+        fs.writeFileSync(targetPath, Buffer.alloc(3000, 0x5a));
+        const tampered = await store.streamFileToObject(sourcePath, 'proj-rp4a7-dst', digest, 3000).then(() => null, error => error);
+        assert.ok(tampered && tampered.reason === 'corrupt-object', 'a tampered target must be refused');
+        assert.equal(fs.readFileSync(targetPath).length, 3000, 'the tampered target must never be overwritten by the import');
+        fs.writeFileSync(targetPath, good);
+        // (d) a failing import (digest mismatch) must not delete the unrelated pre-existing object.
+        const other = Buffer.alloc(100, 0x42);
+        const otherPut = await store.putObject('proj-rp4a7-dst', other);
+        const foreignDigest = crypto.createHash('sha256').update(Buffer.alloc(3000, 0x99)).digest('hex');
+        const failing = await store.streamFileToObject(sourcePath, 'proj-rp4a7-dst', foreignDigest, 3000).then(() => null, error => error);
+        assert.ok(failing && failing.reason === 'corrupt-object', 'a digest-mismatched import must be refused');
+        assert.equal(fs.existsSync(path.join(root, 'projects', 'proj-rp4a7-dst', 'objects', `${foreignDigest}.json`)), false,
+            'no partial foreign object may be published');
+        const survived = await store.getObject('proj-rp4a7-dst', otherPut.digest, 100);
+        assert.ok(survived.equals(other), 'the unrelated pre-existing object must survive the failed import');
+    } finally {
+        rp4Disarm();
+    }
+});
+
+test('RP4 A8 red: restore verification runs through the bounded read core per object (manifest label, per-object labels, streaming import), and a refusal registers nothing', async () => {
+    let dialogTarget = null;
+    const { svc, call, store } = await makeRp4Service({
+        label: 'rp4-a8',
+        dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [dialogTarget] }) },
+    });
+    try {
+        const seeded = await seedProjectWithSnapshots(call, 2);
+        const backupRoot = freshRoot('rp4-a8-target');
+        fs.mkdirSync(backupRoot, { recursive: true });
+        dialogTarget = backupRoot;
+        const backup = await call('storage.v1.backup.create', { projectId: seeded.projectId });
+        assert.equal(backup.ok, true, JSON.stringify(backup.error ?? {}));
+        const backupDir = path.join(backupRoot, fs.readdirSync(backupRoot).find(name => name.startsWith('director-desk-backup-')));
+        dialogTarget = backupDir;
+        const gates = rp4Gates();
+        const rfBefore = gates.readFileCalls;
+        const sessionsBefore = rp4ReadSessions(store)?.length ?? 0;
+        const restored = await call('storage.v1.backup.restore', {});
+        assert.equal(restored.ok, true, JSON.stringify(restored.error ?? {}));
+        assert.equal(gates.readFileCalls - rfBefore, 0,
+            'PRE-FIX BEHAVIORAL RED: restore buffered the manifest and every object with unbounded fsp.readFile');
+        const sessions = rp4ReadSessions(store);
+        if (sessions) {
+            const labels = sessions.slice(sessionsBefore).map(item => item.label);
+            assert.ok(labels.includes('备份清单'), `the manifest read must be a bounded session, labels: ${labels.join(',')}`);
+            assert.equal(labels.filter(label => label === '备份对象').length, 2, 'every restored object must be bounded-verified');
+            assert.ok(labels.includes('备份对象流式导入'), 'the copy leg must stream through the bounded core');
+        }
+        // Refusal: damaged object content → corrupt-object, exactly zero new registrations.
+        const objectsDir = path.join(backupDir, 'objects');
+        const objectFile = path.join(objectsDir, fs.readdirSync(objectsDir)[0]);
+        const goodBytes = fs.readFileSync(objectFile);
+        fs.writeFileSync(objectFile, Buffer.alloc(goodBytes.length, 0x77));
+        const refused = await call('storage.v1.backup.restore', {});
+        assert.equal(refused.ok, false, 'a damaged backup object must refuse the restore');
+        assert.equal(refused.error.message, 'storage.v1/corrupt-object', JSON.stringify(refused.error ?? {}));
+        const list = await call('storage.v1.project.list', {});
+        assert.equal(list.data.projects.filter(project => project.projectId !== seeded.projectId).length, 1,
+            'exactly the first restore registered; the refused one registered nothing');
+    } finally {
+        rp4Disarm();
+        await svc.dispose({ timeoutMs: 5000 });
+    }
+});
+
+function rp4PadFileTo(file, targetBytes) {
+    const current = fs.readFileSync(file);
+    assert.ok(current.length <= targetBytes, `fixture must start at or below ${targetBytes} bytes (got ${current.length})`);
+    fs.writeFileSync(file, Buffer.concat([current, Buffer.alloc(targetBytes - current.length, 0x20)]));
+}
+
+test('RP4 A9: legal manifests padded to exactly 4MiB-1 and 4MiB restore; +1 is refused; the write side refuses an over-budget manifest with transfer-limit and never publishes', async () => {
+    let dialogTarget = null;
+    const bounds = await makeRp4Service({
+        label: 'rp4-a9-bounds', gated: false,
+        dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [dialogTarget] }) },
+    });
+    try {
+        const { svc, call } = bounds;
+        const seeded = await seedProjectWithSnapshots(call, 1);
+        const backupRoot = freshRoot('rp4-a9-target');
+        fs.mkdirSync(backupRoot, { recursive: true });
+        dialogTarget = backupRoot;
+        const backup = await call('storage.v1.backup.create', { projectId: seeded.projectId });
+        assert.equal(backup.ok, true, JSON.stringify(backup.error ?? {}));
+        const backupDir = path.join(backupRoot, fs.readdirSync(backupRoot).find(name => name.startsWith('director-desk-backup-')));
+        const manifestPath = path.join(backupDir, 'manifest.json');
+        dialogTarget = backupDir;
+        rp4PadFileTo(manifestPath, 4 * 1024 * 1024 - 1); // legal JSON + trailing spaces
+        const ok1 = await call('storage.v1.backup.restore', {});
+        assert.equal(ok1.ok, true, `a 4MiB-1 manifest must restore: ${JSON.stringify(ok1.error ?? {})}`);
+        rp4PadFileTo(manifestPath, 4 * 1024 * 1024);
+        const ok2 = await call('storage.v1.backup.restore', {});
+        assert.equal(ok2.ok, true, `a manifest of exactly 4MiB must restore: ${JSON.stringify(ok2.error ?? {})}`);
+        rp4PadFileTo(manifestPath, 4 * 1024 * 1024 + 1);
+        const refused = await call('storage.v1.backup.restore', {});
+        assert.equal(refused.ok, false, 'a manifest beyond the 4MiB budget must be refused');
+        assert.equal(refused.error.message, 'storage.v1/backup-invalid', JSON.stringify(refused.error ?? {}));
+    } finally {
+        rp4Disarm();
+        await bounds.svc.dispose({ timeoutMs: 5000 });
+    }
+    // Write side: a manifest whose single serialization exceeds 4MiB UTF-8 is never written or
+    // published (transfer-limit) and this request's staging is removed.
+    {
+        const writerTarget = freshRoot('rp4-a9-write-target');
+        fs.mkdirSync(writerTarget, { recursive: true });
+        const writer = await makeRp4Service({
+            label: 'rp4-a9-write',
+            dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [writerTarget] }) },
+            wrapLibrary: real => Object.assign(Object.create(real), {
+                backupView: projectId => {
+                    const view = real.backupView(projectId);
+                    return { ...view, project: { ...view.project, name: 'x'.repeat(5 * 1024 * 1024) } };
+                },
+            }),
+        });
+        const { svc: writeSvc, call: writeCall } = writer;
+        try {
+            const seeded = await seedProjectWithSnapshots(writeCall, 1);
+            const published = await writeCall('storage.v1.backup.create', { projectId: seeded.projectId });
+            assert.equal(published.ok, false, 'PRE-FIX BEHAVIORAL RED: an over-budget manifest must be refused before any write');
+            assert.equal(published.error.message, 'storage.v1/transfer-limit', JSON.stringify(published.error ?? {}));
+            assert.deepEqual(fs.readdirSync(writerTarget), [], 'nothing may be published and no staging may survive a refused manifest');
+        } finally {
+            rp4Disarm();
+            await writeSvc.dispose({ timeoutMs: 5000 });
+        }
+    }
+});
+
+test('RP4 A9 evidence: 10000 real distinct-digest objects round-trip through backup and bounded restore (distinct count, manifest bytes, elapsed)', async () => {
+    const startedAt = Date.now();
+    const contracts = await contractsPromise;
+    const { createObjectStore } = await rp4GatedObjectsPromise;
+    const { openLibrary } = await libraryPromise;
+    const root = freshRoot('rp4-a9-10000');
+    const store = createObjectStore({ root });
+    const db = openLibrary({ file: path.join(root, 'library.sqlite'), now: () => Date.now() });
+    const projectId = crypto.randomUUID();
+    const snapshots = [];
+    const seen = new Set();
+    let totalBytes = 0;
+    for (let index = 0; index < 10000; index += 1) {
+        const document = contracts.readSceneDocument(contracts.demoProject());
+        document.name = `RP4独立对象${index}`;
+        contracts.assertSceneDocument(document); // every fixture is schema-legal
+        const bytes = Buffer.from(contracts.canonicalJson(document), 'utf8');
+        const digest = store.sha256Hex(bytes);
+        assert.ok(!seen.has(digest), `digest collision at index ${index}`);
+        seen.add(digest);
+        await store.putObject(projectId, bytes);
+        totalBytes += bytes.length;
+        snapshots.push({
+            snapshotId: `snap-${String(index + 1).padStart(8, '0')}`,
+            revision: index + 1, digest, length: bytes.length,
+            createdAt: '2026-09-20T00:00:00.000Z',
+        });
+    }
+    db.restoreProject({
+        project: {
+            projectId, name: 'rp4-many', revision: 10000,
+            currentSnapshotId: snapshots[9999].snapshotId,
+            createdAt: '2026-09-20T00:00:00.000Z', updatedAt: '2026-09-20T00:00:00.000Z',
+        },
+        snapshots,
+    });
+    const backupRoot = freshRoot('rp4-a9-10000-backup');
+    fs.mkdirSync(backupRoot, { recursive: true });
+    let dialogTarget = backupRoot;
+    const { createStorageService } = await rp4GatedServicePromise;
+    const svc = createStorageService({
+        root, library: db, objects: store,
+        dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [dialogTarget] }) },
+        verifiers: rp4Verifiers(contracts),
+        now: () => Date.now(),
+    });
+    const frame = { sender: { id: 8100 }, senderFrame: { url: 'director://app/rp4-10000' } };
+    const call = (action, data) => svc.runInRequestContext(frame, () => svc.handlers[action](data));
+    try {
+        const backup = await call('storage.v1.backup.create', { projectId });
+        assert.equal(backup.ok, true, JSON.stringify(backup.error ?? {}));
+        assert.equal(backup.data.objects, 10000);
+        const backupDir = path.join(backupRoot, fs.readdirSync(backupRoot).find(name => name.startsWith('director-desk-backup-')));
+        const manifestBytes = fs.statSync(path.join(backupDir, 'manifest.json')).size;
+        assert.ok(manifestBytes <= 4 * 1024 * 1024,
+            `the legal 10000-distinct manifest must fit the 4MiB budget without lowering any limit (got ${manifestBytes})`);
+        const elapsedMs = Date.now() - startedAt;
+        console.log(`RP4 A9 evidence: distinctDigests=${seen.size} manifestUtf8Bytes=${manifestBytes} objectBytes=${totalBytes} elapsedMs=${elapsedMs}`);
+        dialogTarget = backupDir;
+        const restore = await call('storage.v1.backup.restore', {});
+        assert.equal(restore.ok, true, JSON.stringify(restore.error ?? {}));
+        assert.equal(restore.data.snapshots, 10000);
+        const restoredSnapshots = db.listSnapshots(restore.data.projectId);
+        assert.equal(restoredSnapshots.length, 10000);
+        assert.equal(new Set(restoredSnapshots.map(item => item.digest)).size, 10000, 'every restored digest stays distinct');
+    } finally {
+        rp4Disarm();
+        await svc.dispose({ timeoutMs: 30000 });
+        db.close();
+    }
+});
+
+test('RP4 A10 red: a read-handle close failure is never swallowed — a transient failure is retried to a real close and the DB closes exactly once; a persistent failure stays blocked with the DB open', async () => {
+    // (a) transient close failure: the read must FAIL, exactly one ledger entry, one real retry.
+    {
+        const harness = await makeRp4Service({ label: 'rp4-a10-transient' });
+        const { svc, call, root, store } = harness;
+        try {
+            const seeded = await seedProjectWithSnapshots(call, 1);
+            const digest = seeded.refs[0].ref.digest;
+            const objectPath = path.join(root, 'projects', seeded.projectId, 'objects', `${digest}.json`);
+            rp4Arm({ openProxyMatch: candidate => candidate === objectPath, closeFailRemaining: 1 });
+            const unresolvedBefore = typeof svc._internal.unresolvedCleanupCount === 'function' ? svc._internal.unresolvedCleanupCount() : null;
+            const read = await call('storage.v1.snapshot.read', { sessionId: seeded.sessionId });
+            assert.equal(read.ok, false, 'PRE-FIX BEHAVIORAL RED: a read whose handle close failed must not be reported as success');
+            assert.equal(read.error.message, 'storage.v1/io-failure', JSON.stringify(read.error ?? {}));
+            if (unresolvedBefore !== null) {
+                assert.equal(svc._internal.unresolvedCleanupCount(), unresolvedBefore + 1,
+                    'exactly ONE ledger entry for one close failure (no double owner, no duplicate registration)');
+            }
+            const permits = svc._internal.hostPermitCount ? svc._internal.hostPermitCount() : null;
+            if (permits !== null) assert.equal(permits, 0, 'the failed read must release its host permit');
+            rp4Disarm();
+            const drain = await svc.dispose({ timeoutMs: 8000 });
+            assert.equal(drain.ok, true, `the single-owner retry must really close the handle and finish: ${JSON.stringify(drain)}`);
+            assert.equal(svc._internal.dbOpen(), false, 'the database must close after the resource is really accounted for');
+            const again = await svc.dispose({ timeoutMs: 1000 });
+            assert.equal(again.ok, true, 'the second dispose returns the cached single close');
+            const stats = rp4ReadStats(store);
+            if (stats) {
+                assert.ok(stats.closeAttempts >= 2, `close attempts must be traceable (got ${stats.closeAttempts})`);
+                assert.ok(stats.closeFailures >= 1, 'the simulated close failure must appear in the telemetry');
+                assert.ok(stats.closeHandoffs >= 1, 'the handoff to the single owner must appear in the telemetry');
+            }
+        } finally {
+            rp4Disarm();
+        }
+    }
+    // (b) persistent close failure: blocked drain, DB open, then resolved once disarmed.
+    {
+        const harness = await makeRp4Service({ label: 'rp4-a10-persist' });
+        const { svc, call, root } = harness;
+        try {
+            const seeded = await seedProjectWithSnapshots(call, 1);
+            const digest = seeded.refs[0].ref.digest;
+            const objectPath = path.join(root, 'projects', seeded.projectId, 'objects', `${digest}.json`);
+            rp4Arm({ openProxyMatch: candidate => candidate === objectPath, closeFailRemaining: Infinity });
+            const read = await call('storage.v1.snapshot.read', { sessionId: seeded.sessionId });
+            assert.equal(read.ok, false, 'PRE-FIX BEHAVIORAL RED: a persistently failing close must fail the read');
+            const first = await svc.dispose({ timeoutMs: 600 });
+            assert.equal(first.ok, false, 'a persistently failing close must stay blocked');
+            assert.equal(first.blocked, 'cleanup-failed', JSON.stringify(first));
+            assert.equal(svc._internal.dbOpen(), true, 'a blocked drain keeps the database open');
+            rp4Disarm();
+            const second = await svc.dispose({ timeoutMs: 8000 });
+            assert.equal(second.ok, true, `after the fault clears the retry must really close and finish: ${JSON.stringify(second)}`);
+            assert.equal(svc._internal.dbOpen(), false);
+        } finally {
+            rp4Disarm();
+        }
+    }
+    // (c) a failed read still closes its handle and never enters the ledger when close succeeds.
+    {
+        const harness = await makeRp4Service({ label: 'rp4-a10-readfail' });
+        const { svc, call, root } = harness;
+        try {
+            const seeded = await seedProjectWithSnapshots(call, 1);
+            const digest = seeded.refs[0].ref.digest;
+            const objectPath = path.join(root, 'projects', seeded.projectId, 'objects', `${digest}.json`);
+            rp4Arm({ openProxyMatch: candidate => candidate === objectPath, readRejectRemaining: 1 });
+            const closesBefore = rp4Gates().handleCloses;
+            const read = await call('storage.v1.snapshot.read', { sessionId: seeded.sessionId });
+            assert.equal(read.ok, false, 'the injected read failure must fail the read');
+            assert.equal(read.error.message, 'storage.v1/io-failure', JSON.stringify(read.error ?? {}));
+            assert.ok(rp4Gates().handleCloses - closesBefore >= 1, 'a failed read must STILL close its handle');
+            if (typeof svc._internal.unresolvedCleanupCount === 'function') {
+                assert.equal(svc._internal.unresolvedCleanupCount(), 0, 'a cleanly closed handle must not enter the ledger');
+            }
+            rp4Disarm();
+            const drain = await svc.dispose({ timeoutMs: 5000 });
+            assert.equal(drain.ok, true, JSON.stringify(drain));
+        } finally {
+            rp4Disarm();
+        }
+    }
+});
+
+test('RP4 A11: a junctioned project is refused on the read side with the external sentinel untouched; a download parked mid-read loses the race against a reload and never delivers bytes', async () => {
+    // (a) junction on the READ path (project.status integrity walk) — plain service entry.
+    {
+        const harness = await makeRp4Service({ label: 'rp4-a11-junction', gated: false });
+        const { svc, call, root } = harness;
+        try {
+            const created = await call('project.create', { name: 'RP4A11' });
+            const commit = await uploadDocument({ call, sessionId: created.data.sessionId }, await sampleDoc('RP4A11'), {});
+            assert.equal(commit.ok, true, JSON.stringify(commit.error ?? {}));
+            await call('storage.v1.session.leave', { sessionId: created.data.sessionId });
+            const projectDir = path.join(root, 'projects', created.data.projectId);
+            fs.rmSync(projectDir, { recursive: true, force: true });
+            const outside = path.join(root, '..', `rp4-a11-outside-${process.pid}`);
+            fs.rmSync(outside, { recursive: true, force: true });
+            fs.mkdirSync(outside, { recursive: true });
+            fs.writeFileSync(path.join(outside, 'sentinel.txt'), 'untouched', 'utf8');
+            try {
+                fs.symlinkSync(outside, projectDir, 'junction');
+                const status = await call('project.status', { projectId: created.data.projectId });
+                assert.equal(status.ok, false, 'a junctioned project must be refused on the read side');
+                assert.equal(status.error.message, 'storage.v1/path-refused', JSON.stringify(status.error ?? {}));
+                assert.deepEqual(fs.readdirSync(outside), ['sentinel.txt'], 'the external sentinel must stay untouched');
+            } finally {
+                fs.rmSync(outside, { recursive: true, force: true });
+            }
+        } finally {
+            rp4Disarm();
+            await svc.dispose({ timeoutMs: 5000 });
+        }
+    }
+    // (b) reload races a parked real read: the loser never delivers, never leaks the permit.
+    {
+        const harness = await makeRp4Service({ label: 'rp4-a11-race' });
+        const { svc, call, root } = harness;
+        let release = null;
+        try {
+            const seeded = await seedProjectWithSnapshots(call, 1);
+            const digest = seeded.refs[0].ref.digest;
+            const objectPath = path.join(root, 'projects', seeded.projectId, 'objects', `${digest}.json`);
+            const gate = new Promise(resolve => { release = resolve; });
+            rp4Arm({ openProxyMatch: candidate => candidate === objectPath, readGateQueue: [gate] });
+            const pending = call('storage.v1.snapshot.read', { sessionId: seeded.sessionId });
+            const engaged = await rp4WaitUntil(() => rp4Gates().handleReads >= 1, 2000, 'parked read barrier');
+            assert.ok(engaged, 'the download initialization must reach the real read');
+            svc.closeFrameSessions(); // the reload lands while the read is parked
+            release();
+            const result = await pending;
+            assert.equal(result.ok, false, 'a reload racing the parked read must invalidate it');
+            assert.equal(result.error.message, 'storage.v1/unknown-transfer', JSON.stringify(result.error ?? {}));
+            const permits = svc._internal.hostPermitCount ? svc._internal.hostPermitCount() : null;
+            if (permits !== null) assert.equal(permits, 0, 'the losing read must release its host permit');
+            assert.equal(svc._internal.transfers.size, 0, 'the losing transfer must leave the map');
+            assert.equal(svc._internal.sessions.size, 0, 'the reload must close the sessions');
+        } finally {
+            if (release) release();
+            rp4Disarm();
+            await svc.dispose({ timeoutMs: 5000 });
+        }
     }
 });
