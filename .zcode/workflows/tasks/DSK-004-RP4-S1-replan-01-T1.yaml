@@ -1,0 +1,163 @@
+task_id: DSK-004-RP4-S1-replan-01-T1
+title: "纯状态、期限和结果规则"
+status: REPLAN # 两轮T1文本返工未通过，停补丁链转planner；T2不得开始
+source_root: "E:/myProgram/DirectorDesk/director-desk-web"
+base_commit: "2d23931239b98bcd28e91ae256dbc9e0135fc955"
+initial_worktree: "见协调任务和新根evidence/baseline.json；继承624主仓/51旧根路径保护，新增协调/T1记录为主会话管理增量"
+contract_version: "产品不变；T1内部纯逻辑接口为后续T2-T4共同依赖，静态审查后冻结"
+approval:
+  approved: true
+  reference: "ExitPlanMode《S1 重规划：共享核心、分段静态验收》T1已批准，仅文本"
+predecessor: "DSK-004-RP4-S1-resume-01 两轮失败REPLAN保留；不是第三轮补丁"
+parent_task: DSK-004-RP4-S1-replan-01
+verification_root: "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01/replan-01"
+goal: "定义无副作用的共享状态机、截止计算和结果真值规则，提供可独立静态推演的反例，避免先返回后finally改bool"
+context_files:
+  - AGENTS.md
+  - .zcode/workflows/README.md
+  - .zcode/plans/plan-sess_eb0067fe-a560-495d-9531-9beb2e0d04fe.md
+  - .zcode/workflows/tasks/DSK-004-RP4-S1-replan-01.yaml
+  - .zcode/workflows/tasks/DSK-004-RP4-S1-resume-01-review-03.md
+allowed_changes:
+  - "新根/core/RunPolicy.cs"
+  - "新根/tests/RunPolicyCases.cs"
+  - "新根/DESIGN.md（仅T1接口/真值/截止表和未验证说明）"
+  - "新根/evidence/t1/（逐尝试追加的检查器文本、完整命令、原始输出/退出码、hash）"
+  - ".zcode/workflows/tasks/DSK-004-RP4-S1-replan-01-T1.yaml（仅implementation交接追加，不自行审查通过）"
+non_goals:
+  - "候选代码无PInvoke、文件/控制台/网络/进程/线程操作；不实现T2/T3/T4"
+  - "不编译/加载/解释/执行C#候选，不运行测试，不以模拟场景文本称测试已通过"
+  - "不写旧根候选与证据、不改任何生产/测试/桌面/依赖/代理/plan/其他任务"
+  - "不增加预算、不新增监督层、不commit/push"
+acceptance:
+  - id: A1
+    criterion: "显式状态与合法迁移；绑定前不可创建、归属前不可恢复；terminationRequested与rootSignaled/jobEmpty/EOF/close结果独立，不相互替代。所有未知默认不可成功。"
+    evidence_required: "状态/事件表、纯转换函数及具名反例文本"
+  - id: A2
+    criterion: "准备前起算R；首次清理建立一次C，不重置；子截止受父剩余时间限制。自检R10/C5/外25、短验证R20/C10/外40，外层最迟总截止前10秒开始终止确认与封存；没有额外等待窗。"
+    evidence_required: "绝对单调时间模型及每层表，边界前/等于/超过、提前清理、多次BeginCleanup、过慢准备、父截止较早、溢出/非法输入反例"
+  - id: A3
+    criterion: "business/cleanup/evidence/deadline分离；收尾完成才构造终态；业务非零叠加清理未知不得被预期失败接受，终止请求不是确认；证据或期限失效不可成功。"
+    evidence_required: "结果真值表、完整条件而非构造令牌扫描"
+  - id: A4
+    criterion: "为统一消费者提供纯接受规则或显式决策数据，不做I/O：完整结果、绑定身份、实际退出、期限、树终态必须共同成立；文件0进程4/未知退出/缺失或截断结果拒绝。预期业务失败与清理/证据失败明确区分。"
+    evidence_required: "真实条件和具名不一致反例，T3未来仅适配数据不另创真假规则"
+  - id: A5
+    criterion: "无真实时钟读取；可注入/显式传入单调时间值进行纯推演，单位明确。静态C#5类型可见性/签名一致。实现小而可读，不搬三套大实现或新框架。"
+    evidence_required: "源码静态核查、对后续接口的最小说明；不得宣称可编译或运行正确"
+  - id: A6
+    criterion: "保护新基线及51旧根路径，证据含失败逐次追加；所有检查结果准确界定为文本/保护检查。"
+    evidence_required: "输入hash、检查器版本、实际命令、完整输出/退出码、历史清单无变化"
+verification:
+  - command: "只读git/hash/文件集合/文本结构核查；检查器可用Python标准库但不得执行或转译C#逻辑"
+    cwd: "E:/myProgram/DirectorDesk/director-desk-web"
+    expected_result: "保护无异常，所有尝试保留；静态反例只记已编写/推演，不记执行通过"
+  - command: "独立director-reviewer读取完整T1源码、设计、案例与实际差异"
+    cwd: "新根"
+    expected_result: "仅静态PASS/REWORK/REPLAN；PASS前不开始T2"
+side_effects_approved: ["白名单文本/追加证据写入、主机只读文本与hash检查"]
+dependencies: ["协调任务已批准", "新根排他创建及新基线已冻结"]
+stop_conditions:
+  - "T1范围之外文件或内部设计必须超出批准计划则先BLOCKED"
+  - "编译与运行始终BLOCKED，候选不能自证可信外层"
+rollback: "精确撤T1新增量，失败证据保留，不覆盖旧记录"
+implementation:
+  agent: director-coder
+  changed_files:
+    - "新根/core/RunPolicy.cs sha256=dd9fc54a7df3cc9fc9f4593c37d3b75f168fc4c237f8f461693e172ed30db96b (705行, C#5纯逻辑: 13枚举/Budgets/CheckedMath/AttemptClock/RunStateMachine/RunFacts/ResultExpectation/RunVerdict/RunPolicy.Evaluate/ReasonBuffer)"
+    - "新根/tests/RunPolicyCases.cs sha256=8191453a40e0f69dc61a391e983de6bdc4ac7156b6195d4837e371a8427b89a2 (498行, 纯数据案例64条: TR-01..18/DL-01..09含08a-e/CD-01..03/RT-01..19/LF-01..06/TO-01..05)"
+    - "新根/DESIGN.md sha256=72fb9c09150d46120a8406840974526f1ecf15f31a703767d298b8499456708a (212行, 状态表/期限表/结果真值表/纯度与未验证声明/T2-T4接口依赖)"
+    - "新根/evidence/t1/attempt-001..008 逐次追加检查记录(含3次失败: 002禁用令牌文档性命中、005/006检查器缺陷), 未覆盖未删除"
+  checks:
+    - "attempt-001 写前保护: baseline sha256=42db7469...f157d92 PASS, HEAD=2d239312...fc955 PASS, 主仓624+旧根51全一致, 状态增量仅2条已授权任务单, exit=0"
+    - "attempt-002 写后静态检查: exit=1 失败保留 — core头部注释含禁用API的文档性提及4处(System.IO/Thread/nameof/out var), 非代码使用"
+    - "attempt-003 注释措辞修正后重跑: 零命中, 64案例一致, exit=0"
+    - "attempt-004 写后保护: 624+51无变化, exit=0"
+    - "attempt-005 加成员交叉核对: exit=1 失败保留 — 检查器正则无法匹配单行枚举, 误报TriState.Yes"
+    - "attempt-006 修正枚举解析重跑: exit=1 失败保留 — 枚举体内///文档注释吞并成员名, 17条误报"
+    - "attempt-007 注释剥离解析重跑: 13枚举/229处成员引用零违规/64案例一致/禁用令牌零命中, exit=0"
+    - "attempt-008 收尾保护: baseline/HEAD/624/51/状态增量全PASS, exit=0"
+  rework1:
+    agent: director-coder
+    scope: "原T1白名单内修T1-01..06；预算/架构/验收未变，未进入T2"
+    changed_files:
+      - "新根/core/RunPolicy.cs sha256=43a0e9b59f841aafc54281ec8be13e85534b9f28edfeaf8d1b0d32e92becc087 (1210行, 重写: 15枚举/43拒绝原因/枚举fail-closed/BindingOutcome+IdentityMatched+LaunchStage三维分离/RecordedExit声明与实际独立/StartNested父截止进入有效截止/清理后回退拒绝/PolicyError可断言/FinalizeCompleted+FinalizeSucceeded双事实/CreatedNotOwned独立相位与Assign/Resume显式事件)"
+      - "新根/tests/RunPolicyCases.cs sha256=76a4584c30f51895527e3cb15d9dc43cf341cd429f75ff26f8af2bf81b739181 (573行, 102条案例: TR-01..26迁移/DL-01..07+08a..e+09..15期限19条/RT-01..32+TO-01..06+LF-01..19真值57条)"
+      - "新根/DESIGN.md sha256=52199c9140af494cb25a12ef34d98b33a88072c98076c24a92a4c2848370bf75 (230行, REWORK1状态/期限/分阶段真值表与诚实界定)"
+      - "新根/evidence/t1/attempt-009..013 追加检查记录 + checker-t1-protection-v2.py / checker-t1-static-v2.py 保存式检查器(可重放调用)"
+    checks:
+      - "attempt-009 返工开工: 保护624+51零变化/快照12文件一致/候选与冻结hash差异符合预期, exit=0"
+      - "attempt-010 静态核查: exit=1 失败保留 — 暴露ClockCase数组容量15<19越界缺陷、检查器DL期望15应为19、[abce]正则漏d漏报DL-08d、枚举13应为15、DESIGN计数错误"
+      - "attempt-011 修正后重跑: 26/19/57=102全部一致, 386成员引用零违规, 禁用令牌零命中, exit=0"
+      - "attempt-012 LF-08期望修正后终态静态核查: 全PASS, exit=0"
+      - "attempt-013 返工收尾保护: baseline/HEAD/624/51/快照12文件全PASS, exit=0"
+    fixes_mapping:
+      - "T1-01: RunPolicy.IsDefined各枚举+FactValueInvalid/ExpectationInvalid, 期望域外整单拒绝不入LaunchFailure分支; RT-26..31/TR-25/26/LF-18"
+      - "T1-02: BindingOutcome/IdentityMatched/LaunchStage三维; LaunchFailure按NotStarted/ResourcesCreated/Owned分阶段条件与矛盾拒绝; LF-01..19"
+      - "T1-03: RecordedExitKnown/RecordedExitCode独立输入, Evaluate统一一致性; RT-05..10/TO-06/LF-15; 输出维度归OutputCapture(RT-15/16)"
+      - "T1-04: StartNested使父截止进入运行/清理/终止阶段/封存全部有效截止, 终止阶段最迟开始与封存止显式区分, 错过预留可判定; DL-12/13/14/15"
+      - "T1-05: BeginCleanup拒绝早于清理起点, Check同契约; ClockCase断言PolicyError; DL-06/10/11含状态不损坏"
+      - "T1-06: Preparing/Bound合法收尾TR-03/05, CreatedNotOwned相位+AssignConfirmed/AssignFailed/ResumeFailed事件TR-09/10/13/20/21, Finalize双事实关联终态RT-21..25"
+    not_done: ["编译", "案例执行", "运行验证(未批准)", "T2未开始"]
+  rework2:
+    agent: director-coder
+    scope: "原T1白名单内修R1-01..06；预算/架构/验收未变，未进入T2；第2轮未过即转planner"
+    changed_files:
+      - "新根/core/RunPolicy.cs sha256=db4f73d7bd255cdee8f34bcc8dbf07fb529012133ad763ec564af91e638d031c (1340行, R1-01 ReasonBuffer全链ref传递+调用链审计; R1-02 RefusedRecordIdentity与IdentityMatched不适用语义; R1-03 IsDefinedFailureStage接受CreatePending+ProcessCreated/PreparationResourcesCreated事实驱动适用性; R1-04 ParentReserveExhausted准入+TerminatePhaseEnteredOnTime统一最终拒绝)"
+      - "新根/tests/RunPolicyCases.cs sha256=9251aa46ea50b97e9c3326afcc00f2d5843635e7cb436922f67ec7e9e566a073 (623行, 116条: TR×26/DL×22有序拆分DL-06/10补Status、DL-12/17-18拆分、DL-13预留耗尽/RT×35含RT-02仅分支错、RT-33共同+多分支、RT-34/35预留/LF×27含CreatePending路径与拒绝记录身份)"
+      - "新根/DESIGN.md sha256=1639c83854e73a7530376c8f92987ab662ab75ae4fce859eada8eaf2914285e2 (188行, REWORK2顺序表5步预留项、事实驱动适用性表、默认期望契约、诚实措辞统一)"
+      - "新根/evidence/t1/checker-t1-protection-v3.py、checker-t1-static-v3.py、checker-t1-static-v3_1.py(新文件,词边界扫描修正) 与 rework2/attempt-014..018 排他尝试目录(冻结检查器hash/输入副本hash/解释器版本/绝对cwd/精确调用/原始输出/退出码)"
+    checks:
+      - "attempt-014 排他目录: REWORK2开工保护+双快照完整性, snapshot-01 12文件+snapshot-02 19文件全一致, exit=0"
+      - "attempt-015 静态核查: exit=1 失败保留 — 辅助扫描子串匹配误报新事实名ProcessCreated(含Process); exitcode为事后补记并附postscript说明"
+      - "attempt-016 v3_1词边界修正重跑: 115条全一致、458引用零违规、ref传递断言PASS, exit=0; 随人工推演发现DL-17清理前查询与回退契约冲突"
+      - "attempt-017 DL-17/18有序拆分后重跑(v3_2仅更新期望): 26/22/68=116全一致、459引用零违规、live==frozen, exit=0"
+      - "attempt-018 收尾保护: baseline/HEAD/624/51/双快照全PASS, exit=0"
+    fixes_mapping:
+      - "R1-01: EvaluateConsumed/EvaluateLaunchFailure/Finish全部ref ReasonBuffer, 全调用链审计无其他可变收集器; RT-02仅分支错/RT-33共同+多分支错[DeadlineExceeded,CaptureFailed,CleanupUnknown]/RT-32全零15项逐序推演, 数量顺序Accepted均锁定"
+      - "R1-02: RefusedRecordIdentity新事实(Yes=本尝试拒绝记录/No=另一尝试/不适用须Unknown), IdentityMatched仅绑定接受时适用; LF-01正确记录、LF-13另一尝试RefusedRecordMismatch、LF-26未知、LF-25IdentityNotApplicable、LF-27拒绝记录矛盾"
+      - "R1-03: IsDefinedFailureStage接受CreatePending; LF-20完整CreateFailed路径接受; ProcessCreated/PreparationResourcesCreated区分进程与部分准备资源; LF-21清理未知、LF-22确认恰空接受、LF-23未确认拒绝、LF-16不能只靠空Job"
+      - "R1-04: ParentReserveExhausted准入拒绝(DL-13); TerminatePhaseEnteredOnTime进入时刻事实, Evaluate共同项最终拒绝(RT-34/35), 按时进入后跨阈值不误拒(TO-01/RT-01); clock仍负责最迟开始点判定(DL-01/02/12/17)"
+      - "R1-05: DL-06/10补ExpectedCleanupStatus=Rejected; DL-12/17-18按清理前/后有序拆分; 运行器契约断言全部Status/Error与Rejected后全字段不变(DL-10/11)"
+      - "R1-06: 新尝试改排他目录+冻结检查器hash/输入全文hash/解释器版本/绝对cwd/精确调用/原始输出退出码; attempt-015失败原样保留并事后补记说明; 未恢复缺口(002全文、010/011检查器中间版)登记于DESIGN§8与本次交接, 不补造、不再称精确重放"
+    gaps_registered: ["attempt-002旧候选全文未保存", "attempt-010/011所用checker-t1-static-v2中间版本未保存(现v2为终版)", "更早3次被移除FAIL未恢复"]
+    not_done: ["编译", "案例执行", "运行验证(未批准)", "T2未开始"]
+  blockers: []
+review:
+  agent: director-reviewer
+  reference: "agent_d0eb44ed-af9e-4352-893d-3766b8dacf03"
+  verdict: REPLAN
+  scope: "最终T1第2轮复审REPLAN；下方初审/首轮历史保留，以final_review为准"
+  report: ".zcode/workflows/tasks/DSK-004-RP4-S1-replan-01-T1-review-01.md"
+  findings: ["T1-01非法枚举放行", "T1-02绑定/身份/启动失败阶段混同", "T1-03缺持久声明与实际退出独立输入", "T1-04父截止/预留未贯穿clock", "T1-05清理后回退不拒", "T1-06合法收尾与创建/归属相位缺口"]
+  accepted: "A5纯度静态通过；A6当前可核保护通过；A1-A4未过"
+  rework_rounds: 2 # 两轮T1返工均未通过，最终REPLAN；非旧S1清零
+  final_review:
+    verdict: REPLAN
+    stage: "T1第2轮返工独立静态复审"
+    report: ".zcode/workflows/tasks/DSK-004-RP4-S1-replan-01-T1-review-03.md"
+    findings: ["R2-01 Finish非法期望出口漏ref", "R2-02跨分支资源适用性不一致", "R2-03预留仍缺显式时刻统一纯判定", "R2-04 LF21-23继承不适用身份导致预期错误"]
+    snapshot: "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01/replan-01/evidence/t1/static-review-03-snapshot/"
+    protection: "624+51和两旧快照保持，新64文件快照逐份hash一致；无生产改动"
+    evidence_limit: "015退出码事后补记有源码支持但即时退出来源未独立核实，live-vs-inputs未生成；旧缺口未恢复"
+    precedence: "本节覆盖初审/首轮与implementation.rework2已全部修正的声明；历史保留"
+    next: "只读planner重规划，重新人工批准前不得编码，不第三轮补丁；T2/T5/T6均不推进"
+  latest_review:
+    stage: "T1第1轮返工独立静态复审"
+    verdict: REWORK
+    report: ".zcode/workflows/tasks/DSK-004-RP4-S1-replan-01-T1-review-02.md"
+    findings: ["R1-01按值传递丢分支拒绝", "R1-02拒绝记录身份语义错误", "R1-03CreatePending失败映射缺口", "R1-04预留未进准入/结果", "R1-05期限案例预期/顺序不一致", "R1-06原检查器及中间输入版本缺失"]
+    accepted: "A5纯度静态通过；624+51及快照保护通过；A1-A4和A6完整证据未过"
+    precedence: "本结论覆盖implementation.rework1闭合声明，历史原文保留"
+rework2_dispatch:
+  scope: "原T1三个文本与追加证据，修R1-01至06，不进入T2"
+  snapshot: "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01/replan-01/evidence/t1/static-review-02-snapshot/"
+  evidence: "每次独立不可覆盖目录，保存检查器文本/hash、输入全文、解释器版本、绝对cwd/实际调用与完整输出/退出；原001-013与v2脚本/两快照保护，不补造缺失历史"
+  stop: "第二轮未过转planner，无第三轮补丁；预算/架构/验收/白名单变化提前BLOCKED；T5/T6未批准"
+  unverified: ["编译", "测试执行", "运行ABI/资源清理", "可信外层"]
+rework1_dispatch:
+  scope: "原T1规则/案例/设计白名单内修T1-01至06；不写T2-T4"
+  snapshot: "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01/replan-01/evidence/t1/static-review-01-snapshot/"
+  evidence: "原8尝试和快照保护；新尝试追加保存可准确调用的检查器文件、实际命令、原始输出/退出码及输入快照，不删除失败"
+  historical_limits: "002旧源码全文未保留，不能完全复证仅注释修改；旧verbatim命令不可直接重放，原文保留追加更正；不补造"
+  stop: "范围/预算/架构变化先BLOCKED；两轮返工未过转规划；T2前置未满足，编译运行仍BLOCKED"

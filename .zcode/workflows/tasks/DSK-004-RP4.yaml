@@ -1,14 +1,14 @@
 task_id: DSK-004-RP4
 title: "objects/service 全路径有界读取"
-status: REWORK # 已冻结；首次全范围审查F1—F5；S1核心REWORK/执行BLOCKED，生产返工未开始
+status: REWORK # 已冻结；首次全范围审查F1—F5；S1文本两轮REPLAN；T1停补丁；生产返工未开始
 freeze:
-  date: "2026-09-20"
-  requested: "提交进度到远程仓库，冻结进度"
-  approval: "ExitPlanMode《按最新指令冻结并推送检查点》已批准，仅整理记录、提交和普通push；覆盖历史non_goals中commit/push禁止项，不授权发布或继续实施。"
+  date: "2026-09-21"
+  requested: "冻结任务，提交进度到远程仓库"
+  approval: "负责人明确冻结并提交远程；仅整理记录、提交和普通push；不授权发布或继续实施。"
   branch: "checkpoint/dsk-003-progress"
-  parent: "1536c2ad2aaf44b6d168075b8248d93c05c3cfe1"
+  parent: "2d23931239b98bcd28e91ae256dbc9e0135fc955"
   state: FROZEN
-  remaining: "F1/F2生产未修；F3覆盖/F5取证未闭合；S1核心REWORK、执行BLOCKED；S5_DESKTOP_BLOCKED；人工PENDING；RP5—RP8未进入实施。"
+  remaining: "F1/F2生产未修；F3覆盖/F5取证未闭合；S1文本resume-01与T1均REPLAN；T2-T6未推进；S5_DESKTOP_BLOCKED；人工PENDING；RP5—RP8未进入实施。"
   simplified_trial: "用户选择本机桌面试跑，但完整精简方案未获批准、未执行；冻结取代继续试跑。"
   evidence: "原始证据、S1工具及自检在仓库外本机目录，仅报告路径，不随Git上传；不追认缺失历史。"
   execution: "冻结阶段不测试、不构建、不运行产品或清理探针；不宣称已认证当前零遗留进程；提交号与推送结果以Git实际核验为准。"

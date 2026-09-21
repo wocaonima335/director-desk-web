@@ -1,8 +1,14 @@
 # DSK-004-RP4 实施报告：objects/service 全路径有界读取
 
-## 冻结结论（2026-09-20，覆盖下方过程历史）
+## 冻结结论（2026-09-21，覆盖下方过程历史）
 
-**RP4 正式 REWORK；S1 工具独立预审 REWORK / 执行 BLOCKED；S5_DESKTOP_BLOCKED；人工 PENDING。** 按负责人要求冻结源码、测试和记录，停止实施。分支 `checkpoint/dsk-003-progress`，父提交 `1536c2ad2aaf44b6d168075b8248d93c05c3cfe1`；新提交及推送结果以 Git 核验为准。本检查点不是发布、RP4 PASS 或 DSK-004 完成。
+**RP4 正式 REWORK；S1 文本候选与 T1 纯规则均独立 REPLAN；生产 F1/F2 未修；S5_DESKTOP_BLOCKED；人工 PENDING。** 按负责人“冻结任务，提交进度到远程仓库”停止实施。分支 `checkpoint/dsk-003-progress`，父提交 `2d23931239b98bcd28e91ae256dbc9e0135fc955`；新提交及推送结果以 Git 核验为准。本检查点不是发布、RP4 PASS 或 DSK-004 完成。
+
+2026-09-21 续接只推进仓库外 S1 文本与 T1 纯规则，未改生产。旧工具根本机缺失。`DSK-004-RP4-S1-resume-01` 两轮文本后 REPLAN；获批共享核心后仅实施 T1，两轮后再次 REPLAN。T2—T6 未开始。本机证据根 `E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01/` 不随 Git 上传。规划代理在后续收敛时因额度中断无新方案。父 `review.rework_rounds` 仍为 1。
+
+## 冻结结论（2026-09-20，覆盖下方更早过程历史）
+
+**RP4 正式 REWORK；S1 工具独立预审 REWORK / 执行 BLOCKED；S5_DESKTOP_BLOCKED；人工 PENDING。** 当时按负责人要求冻结源码、测试和记录，停止实施。分支 `checkpoint/dsk-003-progress`，父提交 `1536c2ad2aaf44b6d168075b8248d93c05c3cfe1`；新提交及推送结果以 Git 核验为准。本检查点不是发布、RP4 PASS 或 DSK-004 完成。
 
 ### RP4 首次全范围独立审查
 

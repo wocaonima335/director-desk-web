@@ -1,0 +1,217 @@
+task_id: DSK-004-RP4-S1-resume-01
+title: "S1本机新建文本候选与独立静态预审"
+status: REPLAN # 两轮文本返工未通过；禁止第三轮补丁，转planner，新方案须人工批准
+parent_task: DSK-004-RP4
+parent_rework_rounds: 1
+source_root: "E:/myProgram/DirectorDesk/director-desk-web"
+base_commit: "2d23931239b98bcd28e91ae256dbc9e0135fc955"
+initial_worktree: "起始干净；主会话批准的provider修复后仅planner/reviewer各一行变化；已冻结620路径。"
+contract_version: "产品dsk.v1/storage.v1不变；工具CLI需显式列入文本审查"
+approval:
+  approved: true
+  reference: "Ethan在最新进度与阻塞总结后明确：批准执行。继承RP4首轮返工S1仓库外工具范围；主会话收窄本次派发为文本候选及静态预审，不包含执行。"
+  planner: "agent_d3544968-78f5-49a7-9efb-2bf9e812bf40：补证并收窄后文本阶段PLAN_READY；运行仍BLOCKED。"
+  scope_interpretation: "旧工具缺失，新建候选不是旧源码修复；不扩展生产/桌面范围。新增监督组件只能显式列为未运行候选，不视为可信。"
+verification_root: "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01"
+baseline:
+  manifest: "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01/evidence/baseline-manifest.json"
+  sha256: "4d4cb3a26977dad6ab9d04d87ee6747a8e66aaa51374efc4fb278799394f3d83"
+  inherited_diff: "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01/evidence/inherited-agent-config.diff"
+  preflight: "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01/evidence/preflight.json"
+goal: "形成逐项回应S1-F1至F7的新文本候选及可核验的执行设计，由独立reviewer静态审查；不以文本完成冒称工具安全门PASS。"
+context_files:
+  - AGENTS.md
+  - .zcode/workflows/README.md
+  - .zcode/workflows/tasks/DSK-004-RP4.yaml
+  - implementation/DSK-004-RP4.md
+  - 进度.md
+  - scripts/test-dsk-storage-desktop.mjs
+allowed_changes:
+  - "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01/coder/tools/（新宿主、fixture、显式声明的监督候选文本）"
+  - "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01/coder/selftest/（自检驱动及具名场景文本，不执行）"
+  - "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01/coder/README.md（CLI、执行链、范围、未验证边界）"
+  - "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01/evidence/candidate-text-*.json（新文件，输入hash和静态检查）"
+  - ".zcode/workflows/tasks/DSK-004-RP4-S1-resume-01.yaml（追加实际交接记录）"
+non_goals:
+  - "不编译、执行、加载或解释候选代码；不执行自检、probe、任何产品测试/build/prepare/桌面启动。"
+  - "不使用旧runner或脚本，不扫描/终止进程，不据PID/命令行通配清理。"
+  - "不修改生产、产品测试、桌面脚本、依赖、锁文件、代理配置和公共契约。"
+  - "不覆盖基线/前置记录，不补造历史，不删除失败证据，不commit/push/发布。"
+  - "不把文本审查计为第二轮RP4全范围返工；不进入RP5。"
+acceptance:
+  - id: S1-F1
+    criterion: "创建成功即有异常安全资源owner；Assign失败不Resume；日志失败不截断收尾；检查Terminate/Wait/Close结果并使用剩余C。"
+    evidence_required: "候选实际代码、故障场景文本、主错误与清理错误并存策略。"
+  - id: S1-F2
+    criterion: "外层超时真正通过持有句柄停止受控树并确认，无裸PID清理、无限Wait；未知身份fail-stop。"
+    evidence_required: "明确监督链、自举边界、root早退/监督器死亡/取消场景；不存在可信外层时运行BLOCKED。"
+  - id: S1-F3
+    criterion: "R覆盖setup前至收尾；C在首次清理前建立且不重置；日志/flush/hash/close不得逃逸预算。"
+    evidence_required: "单调时间状态设计与故障场景；不可保证的同步I/O上界明确列为运行阻塞，不能宣称绝对实时保证。"
+  - id: S1-F4
+    criterion: "正确区分EOF与管道错误，双管道分别确认；非EOF错误不SUCCESS。"
+    evidence_required: "实际错误处理及正常/异常管道场景。"
+  - id: S1-F5
+    criterion: "PInvoke布局含TotalPageFaultCount，32/36/40/44偏移正确；查询失败/截断不判Job空；错误码正确。"
+    evidence_required: "原生声明和拟运行布局断言、成员/缓冲失败场景。"
+  - id: S1-F6
+    criterion: "运行前绑定源/exe/fixture/driver/命令，日志封口后hash且不再写；每次唯一尝试，不自hash循环。"
+    evidence_required: "候选清单、完整CLI/argv/cwd/ENV定义、失败证据保留设计；当前只记录文本hash。"
+  - id: S1-F7
+    criterion: "有效cwd与入口ENV可定位；大小写不敏感清理DSK_RP*，白名单精确传递；中文/空串/引号/尾斜杠覆盖；前台日志与文件日志分开。"
+    evidence_required: "精确父子对照场景文本、敏感信息边界。"
+  - id: PROTECTION
+    criterion: "主仓620路径相对baseline无变化，唯一新增任务记录为主会话授权；两行代理配置保持。"
+    evidence_required: "只读hash对照及实际diff；所有未执行验证明确标记。"
+verification:
+  - command: "只读git diff/status、Python文本hash及文件集合检查；不import/执行候选"
+    cwd: "E:/myProgram/DirectorDesk/director-desk-web"
+    expected_result: "保护通过；候选是可交静态审查的文本，未生成exe或运行日志"
+  - command: "director-reviewer独立读取候选文本与任务，静态预审"
+    cwd: "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01"
+    expected_result: "明确静态PASS/REWORK/REPLAN和运行门状态；不执行候选"
+future_execution_gate:
+  status: BLOCKED
+  requirements: "静态预审通过、可信外层监督可核实、具体命令与范围取得执行批准后另行派发；本任务不解锁运行。"
+  inherited_budgets: "selftest R10/C5/outer25秒；编译和短验证R20/C10/outer40秒；不擅加预算。"
+side_effects_approved:
+  - "在已登记新隔离根写文本与hash清单；只读本机已有工具元数据。"
+dependencies:
+  - "旧根及限定范围内工具源码缺失已登记，历史不追认。"
+  - "本机csc/PowerShell版本路径已核实，但没有编译或安全执行认证。"
+rollback: "仅精确撤本任务增量；基线、继承配置、候选失败历史和旧记录保留；不reset/clean。"
+implementation:
+  agent: director-coder
+  changed_files:
+    - "verify-rp4-s1-resume-01/coder/tools/dskrun.cs（新建 S1 原生 Job 宿主候选文本；sha256 8e3e4735145251573aa70defa2eb164adcf8f2ad7c7a67a9da00a628784e8d53，82016 字节；F5 布局已按本机 SDK 头文件更正为 48 字节）"
+    - "verify-rp4-s1-resume-01/coder/tools/outerwatch.cs（新建外层监督候选文本，显式未审未运行；sha256 d02a732b3571fc71d4c96d3af84edc8a33fdc130623a7e07f7822540ba7ac68d，34482 字节）"
+    - "verify-rp4-s1-resume-01/coder/tools/dsksample.cs（新建自检 fixture；sha256 13bae550412a762f905d015e03ca9454820c9230b1759e5a441eff0d3e47efea，9328 字节）"
+    - "verify-rp4-s1-resume-01/coder/selftest/run-selftests.cs（新建自检驱动候选，场景 C0—C8；sha256 2ff13c9790df81c90786f50a37e4593cd5d36fcf385cff2b6c3e96b4af613325，49299 字节）"
+    - "verify-rp4-s1-resume-01/coder/selftest/scenarios.md（具名场景文本与不能确定性触发清单；sha256 5de5502822dde77b55ece19118658b214f593a281574fdafa03a65e4a0327093，7318 字节）"
+    - "verify-rp4-s1-resume-01/coder/README.md（CLI/执行链/范围/S1-F 落点/F5 布局核验/未验证边界；sha256 bb0bbeceb5ad832bf402c1a4b61325afbc5caeba00e12d4585eca1432f347512，16091 字节）"
+    - "verify-rp4-s1-resume-01/evidence/candidate-text-hashes.json（新建，7 个候选文本 hash 清单）"
+    - "verify-rp4-s1-resume-01/evidence/candidate-text-f5-layout.json（新建，S1-F5 结构体布局本机头文件核验：文件/行号引用、偏移表、大小推导、更正记录；sha256 d3a6095713400677548e49fbffff956b3c7d8449e70ba8837c063840be647367，10126 字节）"
+    - "verify-rp4-s1-resume-01/evidence/candidate-text-static-checks.json（新建，静态检查实际命令与退出码，8 项）"
+    - ".zcode/workflows/tasks/DSK-004-RP4-S1-resume-01.yaml（仅本节与 coder_handover 节事实追加）"
+  checks:
+    - "CHECK-A git rev-parse HEAD + git status --porcelain（cwd=主仓）: exit 0，HEAD=2d23931239b98bcd28e91ae256dbc9e0135fc955，工作树仅两行代理配置修改+主会话任务单"
+    - "CHECK-A 620 路径逐一 sha256 对照 evidence/baseline-manifest.json: exit 0，checked=620 mismatch=0 missing=0"
+    - "CHECK-A git diff 两代理配置: exit 0，恰为 2 增/2 删 provider 行（6551fef7…/gpt-6-astra ↔ bc04ac19…/gpt-6-astra）"
+    - "CHECK-B/C 候选注释剥离扫描: exit 0，禁令令牌（taskkill/Stop-Process/OpenProcess/.Kill(/breakaway 标志/WaitForExit(/宿主 Process.Start）零命中；必需令牌齐备；C#7+ 语法启发式零命中；括号平衡"
+    - "CHECK-F5 本机 winnt.h 三版本（19041/20348/22621）读取：exit 0，JOBOBJECT_BASIC_ACCOUNTING_INFORMATION 均为四 LARGE_INTEGER（ThisPeriodTotal* 在 16/24）+ 四 DWORD（TotalPageFaultCount@32），12845-12854 行（22621）等行号经严格 \\n 切分复核；evidence/README/源码三处一致"
+    - "CHECK-D 隔离根清单对照 allowed_changes: exit 0，无白名单外文件"
+    - "CHECK-E 候选 hash 重算对照 candidate-text-hashes.json: exit 0，7 文件全部一致"
+    - "CHECK-F 产物过滤: exit 0，验证根内无任何 exe/dll/pdb/log/jsonl"
+  blockers:
+    - "运行门保持 BLOCKED（与任务单 future_execution_gate 一致）：候选未编译未执行；outerwatch 是未审未运行候选，不能自举为可信外层；解阻需静态预审 PASS + 可信外层可核实 + 另行执行批准。"
+    - "S1-F5 布局已按本机头文件核验并更正（不再是分歧）：任务验收数字 32/36/40/44、总长 48 正确——winnt.h 全部三个本机版本（19041 行 11966、20348 行 12973、22621 行 12845）均声明四个 LARGE_INTEGER（含 ThisPeriodTotal*），LARGE_INTEGER=8 字节（union，22621 行 870-885），结构体在 pshpack 区外（22621 前一 poppack@9842、后一 pshpack4@18224），pack4/pack8 偏移相同。候选初稿（32 字节、16/20/24/28）错误、从未编译运行，已在源码更正并保留更正记录；旧'理由：+16 系 LARGE_INTEGER 误计'的解释撤回。运行时证据（Marshal.OffsetOf/SizeOf + 空 Job ReturnLength==48 + 空闲计数器全零）留待 C7 于执行轮产出。完整推导与引用：evidence/candidate-text-f5-layout.json、coder/README.md 第 7 节。"
+
+coder_handover:
+  date: "2026-09-20"
+  agent: director-coder
+  status: "IMPLEMENTED（仅文本，待 director-reviewer 独立静态预审；非门禁 PASS、非验收）"
+  dispatch: "Ethan 批准解阻执行；planner agent_d3544968-78f5-49a7-9efb-2bf9e812bf40 文本阶段 PLAN_READY；旧 S1 工具缺失，按收窄范围新建候选，不伪称修复旧代码。"
+  baseline_verified: "主仓 HEAD 2d23931239b98bcd28e91ae256dbc9e0135fc955；620 路径逐一 sha256 与 baseline-manifest.json（4d4cb3a2…）零差异；两行 provider 继承修改保持；隔离根内既有 evidence 三件未动。"
+  candidates:
+    - "coder/tools/dskrun.cs：挂起创建→句柄身份核验→Assign→Resume，任一失败不 Resume 且按句柄限期终止；Job 仅 KILL_ON_JOB_CLOSE、句柄不继承、不启用任何 breakaway 标志；无 PID 扫描/taskkill/裸 PID 兜底；R 起 Main 首语句覆盖 parse/bind/setup，C 为首个清理动作前一次建立、永不重置的单一全局清理窗，log flush/封口/hash/close 计入 C；Terminate/Wait/Close 结果全查、等待用剩余 C；成功=业务 0+Job 恰确认空+双管道 EOF+无等待错误且判定在 R 内；管道 EOF 仅 0 字节/ERROR_BROKEN_PIPE(109)，其余错误终态 PIPE_ERROR 永阻 SUCCESS；pidlist 查询失败/截断（ERROR_MORE_DATA 234 / ERROR_INSUFFICIENT_BUFFER 122）绝不判 Job 空（未知=非空，增长重试封顶后仍未知即 CLEANUP_BLOCKED）；ENV 大小写不敏感清 DSK_RP*（只记名）再白名单精确施加（名+字节数+值 sha256，值不落日志）；CRT 规则 argv 引号往返；UTF-16 环境块配 CREATE_UNICODE_ENVIRONMENT；运行前绑定 run-open.json（payload/自身/附加目标 sha256、argv、cwd、ENV 计划、预算），失败证据保留；log.txt 单文件封口后 sha256 且不再写，result.json 分离记录（log_sha256、cleanup 明细、业务码）；attempt 目录唯一不复用不删除；前台实时透传与文件日志分离；退出码 0—6；--selfcheck-layout 布局断言（四 LARGE_INTEGER+四 DWORD=48 字节，TotalPageFaultCount@32，按本机 winnt.h 三版本核验并更正初稿）+空 Job 真实会计查询（ReturnLength==48+空闲计数器全零交叉验证）+pidlist 恰空验证，零进程。"
+    - "coder/tools/outerwatch.cs：外层监督候选（未审未运行）。自建 Job W（kill-on-close）；外层预算惯例 R+C+10；到点 TerminateJobObject(W) 持句柄终止+限期确认（W pidlist 恰空+子进程 signal，确认窗至少 10s），未确认 exit 5 OUTER_CONFIRM_FAILED 并停止，无无限等待/无 PID 兜底；子身份经 CreateProcess 句柄 QueryFullProcessImageNameW 核验后于 Assign 后才 resume；'--' 后命令行字节级透传（自检驱动只引号一次）；与 dskrun 的 attempts 目录分离（outer-attempts），同封口纪律。"
+    - "coder/tools/dsksample.cs：fixture（echo-argv/echo-env/echo-cwd/write-marker/heart/sleep/hang/tree/stdout-close），全部字节级输出走 Base64 UTF-8；孙代经 UseShellExecute=false 继承 stdout 持管道；stdout-close 模式提前关闭 stdout 后存活 1s 再以非零退出（EOF≠成功）。"
+    - "coder/selftest/run-selftests.cs + scenarios.md：具名场景 C0 编译(20/10/40)、C1a 正常+ENV 清除/白名单精确对照、C1b argv 8 危险参数往返、C1c 中文 cwd、C2 root 早退孙代持管道（成功须≥2.8s）、C3 超时整树（R10 到点 Terminate+C5 内确认，exit 3 且 outerwatch 传播 reason=CHILD_PROPAGATED）、C4 绑定失败（run-open.json bind_ok:false 证据保留、marker 不存在、零进程）、C5 未知参数+并发外部哨兵 12 tick 全程不受扰+attempts 目录不存在、C6 监督者死亡机制模拟（驱动关闭最后一个 W3 句柄；证明=root 句柄 signal+stdout EOF，不以文件冻结为证）、C7 布局自检、C8 stdout 早关 exit 7 必 CHILD_FAIL；驱动给每个子进程包 W_drv，失败即停不重试到绿，尝试目录全新保留。"
+  f1_to_f7: "逐项落点见 coder/README.md 第 6 节；每项含候选实际代码位置与场景映射，满足 acceptance.evidence_required 的文本形态。"
+  f5_discrepancy: "已按协调要求完成可核验核验并更正：任务数字 32/36/40/44（总长 48）经本机三个 SDK winnt.h 逐行证实正确；候选初稿 32 字节布局（16/20/24/28）错误已更正（从未编译运行），'+16 误计'解释撤回；验收文本未改动、范围未扩大，运行时证据（OffsetOf 断言 + 空 Job ReturnLength==48 + 计数器全零交叉验证）设计于 C7、留执行轮产出。推导、行号与更正记录见 evidence/candidate-text-f5-layout.json 与 coder/README.md 第 7 节，留独立审查裁定。"
+  supervision_candidate: "outerwatch.cs 显式记录为未审未运行组件，不能自举可信；监督链=控制台→outerwatch(W)→dskrun(J)→payload 树（层级覆盖、无 breakaway）；监督者死亡机制由 C6 模拟，端到端外部击杀场景列入未验证。"
+  execution_gate: "BLOCKED。本轮零编译、零执行、零加载、零 probe；验证根内无 exe/log；未运行任何产品测试/build/prepare/桌面；未扫描/终止任何进程；未下载。"
+  static_checks: "全部 PASS（8 项，实际命令与退出码见 evidence/candidate-text-static-checks.json）：主仓保护 3 项、候选令牌/C#5 扫描、F5 头文件引用交叉核验、白名单清单、hash 清单（7 文件）、产物过滤。"
+  cannot_trigger: "Assign/Resume 失败路径静态可及但无法确定性注入；非 EOF 管道错误不可外部注入（状态机构造封死，C8 证 EOF≠SUCCESS 一侧）；pidlist 截断在此规模不自然出现。均如实记录于 scenarios.md。"
+  not_entered: "不进入 S2/S5/RP5；父任务 rework_rounds 仍 1，本关联任务独立计数；未 commit/push。交接后 coder 停止写入，供 reviewer 稳定读取。"
+  review_focus: "1) F5 更正是否成立（本机 winnt.h 三版本四 LARGE_INTEGER 推导、32/36/40/44@48；线上的 learn.microsoft.com 链接本轮未联网未查证，已如实标注）；2) ProcessOwner 未归属终止与 C 窗语义（首次清理动作前建立、不重置）；3) pidlist 未知=非空策略与 CLEANUP_BLOCKED 终止；4) outerwatch 透传 '--' 解析与身份核验顺序；5) C6 的 EOF 证明链（孙代写端关闭为 EOF 必要条件）；6) 候选 C#5 兼容性（本轮仅启发式检查，非编译证明）。"
+  remaining_risks: "启发式静态检查不是编译器；dskrun 日志文本镜像在多字节跨块时可能失真（b64 比对不受影响）；run-open.json 为手写极简 JSON 序列化，结构供审查者核对。"
+review:
+  agent: director-reviewer
+  reference: "agent_3b7f63ab-4f51-4428-ae8c-161fa3d1caac"
+  verdict: REPLAN
+  scope: "最新结论：第2轮文本返工复审REPLAN；下方ST与latest_review为初审/第1轮历史，最终以replan_result为准；非父RP4全范围复审"
+  findings:
+    - "ST-01阻断：PInvoke BOOL与IntPtr及bool/int消费编译错误"
+    - "ST-02高：CreateProcessW Unicode封送与argv首项引用"
+    - "ST-03高：owner窗口、重复关闭、未归属清理与错误丢失"
+    - "ST-04高：setup/成功提交/收尾截止缺失、分层额外预算"
+    - "ST-05高：outer根退出后未等Job空/双EOF就成功"
+    - "ST-06高：driver继承串扰、finally遗漏、ERROR当EOF"
+    - "ST-07高：C1a环境计数矛盾及C3孙代过早退出"
+    - "ST-08高：非法JSON、参数边界和绑定缺失、覆盖产物与失败不即停"
+    - "ST-09高：封口后写入、证据失败仍成功、ENV原值泄漏"
+  report: ".zcode/workflows/tasks/DSK-004-RP4-S1-resume-01-review-01.md"
+  independently_confirmed: "620路径保护通过；48字节会计布局静态成立；运行证据尚无"
+  unverified: ["全部编译、自检、运行和整树清理行为", "可信外层监督", "RP4生产修复", "S5桌面与人工验收"]
+  rework_rounds: 2 # 两轮文本返工已结束且未通过，最终REPLAN；父RP4计数仍1
+  replan_result:
+    verdict: REPLAN
+    reference: "agent_3b7f63ab-4f51-4428-ae8c-161fa3d1caac"
+    report: ".zcode/workflows/tasks/DSK-004-RP4-S1-resume-01-review-03.md"
+    quota_interruption: "上次usage_limit_reached无结论、不计技术失败；Ethan指令继续后同代理重试完成本次复审"
+    findings: "R2-01至R2-09：未声明字段、finally无法撤回成功、截止缺口、文件/进程结果冲突、终止确认/释放缺口、完整绑定缺失、自检回归、参数与存活证明边界、失败检查证据缺失"
+    protection: "620基线、两旧快照与旧六证据一致，生产零变化；审查时40文件，撤回41文件计数"
+    snapshot: "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01/evidence/static-review-03-snapshot/"
+    evidence_limit: "三次superseded FAIL原始记录未在验证根找到，notes不能替代；外部原记录能否恢复尚未核实，不补造"
+    precedence: "本结论覆盖rework2_coder已完全修复/结果无冲突等过强声明；历史保留"
+    next: "director-planner只读重规划；新方案人工批准前不得编码或运行，不派第三轮补丁"
+  latest_review:
+    stage: "第1轮文本返工独立静态复审"
+    verdict: REWORK
+    reference: "agent_3b7f63ab-4f51-4428-ae8c-161fa3d1caac"
+    report: ".zcode/workflows/tasks/DSK-004-RP4-S1-resume-01-review-02.md"
+    findings: "R1-01至R1-09：新增类型错误、owner缺口、预算扩张、清理/持久结果假成功、属性生命周期、自检负预算、绑定缺失、日志错误掩盖、解析与存活证明不足"
+    improved: "ST-02原缺陷静态关闭；quiet-tree与C1a/C3改善；F5布局正确；620基线/旧快照/证据/历史交接保持"
+    precedence: "本节覆盖rework1_coder全部修复、不叠预算、完整绑定等过强声明；历史原文保留，不改写为新成功"
+rework2_dispatch:
+  scope: "原文本范围修R1-01至R1-09；运行门BLOCKED，不编译、不执行"
+  snapshot: "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01/evidence/static-review-02-snapshot/"
+  evidence_rule: "两份快照与全部旧证据只读；新记录candidate-text-rework2-*.json；任务仅追加rework2_coder"
+  stop: "第二轮返工复审仍未通过则转planner重规划，不第三轮补丁；范围/架构/预算/验收变化提前BLOCKED"
+rework1_dispatch:
+  scope: "原文本白名单内修ST-01至ST-09，不编译运行，不扩大生产范围"
+  snapshot: "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01/evidence/static-review-01-snapshot/"
+  evidence_rule: "原candidate-text-*.json及snapshot保护；新证据用candidate-text-rework1-*.json，不覆盖历史"
+  records_rule: "初次implementation/coder_handover保留为历史，追加rework1交接；审查结果优先于旧完成声明"
+  stop: "需要架构/依赖/预算/验收/范围变化则BLOCKED交planner；两轮文本返工未过必须重规划；父rework_rounds保持1"
+rework1_coder:
+  date: "2026-09-20"
+  agent: director-coder
+  status: "IMPLEMENTED（REWORK1 文本完成，待独立静态复审；非门禁 PASS、非验收）"
+  note: "本节为第1轮文本返工事实追加；其上 implementation/coder_handover 与 review 节为历史与审查记录，未改写。审查发现的缺陷均为真实代码问题，本轮逐项修真实代码与测试逻辑，未以注释或文档宣称闭合。"
+  st_fixes: "ST-01至ST-09逐项修复与静态核验映射见 verify根/evidence/candidate-text-rework1-st-mapping.json；代码位置、触发条件、修复方式、核验命令全部登记。要点：ST-01 CreateProcessW 全部改 BOOL 返回+Unicode 封送、outer bool==1 清除、Resume 结果全消费；ST-02 argv[0] 引号化+新增 C1d（空格+中文 exe 路径与 cwd）；ST-03 HandleLedger 唯一关闭+owner 预置于 Create 前+单一 FinalizeRun 在全部关闭后定退出码；ST-04 六处 R 检查点+C 窗管住封口/关闭/写出（超点或证据失败 ⇒ SUCCESS 降级 CLEANUP_BLOCKED）+driver 从 launch 后起算不叠层+编译 R20/C10/外层40 阶段化+同步I/O与可信外层硬上界明确 BLOCKED；ST-05 outer 根退出后必须确认 Job 恰空+双管道 EOF_OK 才传播子码，否则持句柄终止+限期确认并失败；ST-06 driver 全部启动改 STARTUPINFOEXW+句柄清单受控继承、Reader RUNNING/EOF/ERROR 三态、单一 finally、实时前台透传；ST-07 C1a 精确允许/stale 断言（STALECOUNT==1 且恰为 DSK_RP_SELFTEST_OK）、dsksample hang 心跳身份+treehang 全树挂起、C3 存活前置断言；ST-08 run-open/result 合法 v2 JSON（argv 数组、ENV 结构化脱敏）、绑定目标全部必填、C0 原始 csc 输出先落唯一文件+源/csc/driver hash 登记+产物不覆盖+失败即停；ST-09 封口开始即写禁区、封口/写出失败禁止 exit 0、--env-set 值在 CLI 记录脱敏为 sha256。"
+  files:
+    - "coder/tools/dskrun.cs（sha256 a27f39f1a27926597c6480ecfc26b2b0a6a9b87563e31984ce5f85d60ca3a400，88139 字节）"
+    - "coder/tools/outerwatch.cs（sha256 2b7c01751841d405889057d793a5e7e7bdc1c0e83cc14ad9f124bbb8c950e10f，42454 字节）"
+    - "coder/tools/dsksample.cs（sha256 7d954ef8c82db91c7e863f0009b92817eba900dde627d5101cb23a852dd14f74，11318 字节）"
+    - "coder/selftest/run-selftests.cs（sha256 f06eb19e3a376c8b2f512e3926a5d16487b6f673a966c3783b956f243e336307，65736 字节）"
+    - "coder/selftest/scenarios.md（sha256 796f2178a81a5d5542bdb76c7f33fb0cf60549a146b72a4e79104dd5168b7959，7829 字节）"
+    - "coder/README.md（sha256 de3de499a905cf051e0ecd91d1317927f756aa61a6eda6e11aa866999f9b1f01，15273 字节）"
+    - "evidence/candidate-text-rework1-hashes.json / candidate-text-rework1-st-mapping.json / candidate-text-rework1-static-checks.json（新建）"
+    - ".zcode/workflows/tasks/DSK-004-RP4-S1-resume-01.yaml（仅追加本节）"
+  checks: "17/17 PASS（candidate-text-rework1-static-checks.json）：主仓 HEAD/status、620 路径逐一 sha256、两行 provider diff、快照 10 文件+原 3 份 evidence hash 保护、令牌/括号扫描、ST-01 签名审计（BOOL 签名+Unicode+零 bool==int）、ST-02..ST-09 源码构造核验、白名单清单（26 文件零多余）、rework1 hash 重算、产物过滤。原 static-checks 的 files=13 实为 12 计数差异已按实际清点更正记录于 rework1 检查文件（原文件保护未动）。一次检查器自身缺陷（ST08 搜索运行时 JSON 文本）已更正并在文件中注明。"
+  unchanged: "PROTECTION 与 F5 48 字节布局按审查结论保持（源码 48 字节布局与 f5-layout 证据未改）；运行门 BLOCKED；outerwatch 仍为未审未运行候选；父 rework_rounds=1。"
+  not_run: "编译、--selfcheck-layout、C0—C8+C1d、outerwatch 端到端、真实外层击杀、产品测试/build/prepare/桌面、进程扫描/终止、下载、运行时 ABI 证明（ReturnLength==48）——全部未执行；启发式扫描不是编译证明。"
+  blockers: "无新增架构/依赖/预算/验收变更需求；未触发 BLOCKED 转 planner 条件。"
+  review_focus: "1) ST-01 全量 PInvoke 复核是否有遗漏（重点 CreateProcessW/ResumeThread/QueryJobEmpty 消费类型）；2) HandleLedger 关闭纪律与 FinalizeRun 幂等性；3) ST-04 检查点完备性与 C 窗对收尾的约束；4) ST-05 安静树判定的预算耗尽分支；5) 句柄清单属性的参数正确性（STARTUPINFOEXW cb、属性列表生命周期）；6) C1a/C3 断言与 fixture 行为一致性；7) ST-09 封口禁区与脱敏是否可绕过。"
+rework2_coder:
+  date: "2026-09-20"
+  agent: director-coder
+  status: "IMPLEMENTED（REWORK2 文本完成，待独立静态复审；最后一轮文本返工，再未通过转 planner；非门禁 PASS、非验收）"
+  note: "本节为第 2 轮文本返工事实追加；rework1_coder 与更早记录按历史保留，不改写。REWORK1 的过强声明（ST 全部修复/预算不叠加/预绑定完整/17 项构造检查充分）已在 candidate-text-rework2-r1-mapping.json 与 coder/README.md §0/§10.3 正式撤回，以独立复审优先。"
+  r1_fixes: "R1-01至R1-09逐项修复与静态核验映射见 verify根/evidence/candidate-text-rework2-r1-mapping.json。要点：R1-01 Budget 去日志化（Program.CheckR / outer DeadlineExpired 先记录后复查）+ driver CreateProcessW 改 ref STARTUPINFOEXW 与实参一致；R1-02 Emergency/Finish 按 _childCreated/_childAssigned 真实状态分支、Ledger close 失败保留所有权（成功才撤销）、dskrun 环境块 HGlobal finally 释放、FinalizeRun 每步独立 try/catch 主错清理错并存；R1-03 三层单一绝对截止（表见 README §8）、全部等待/收尾用剩余预算（删 +10s/+3s/重复等待）、日志后复查、成功提交前检查、RESULT 在 C 窗内+超期更正行；R1-04 关闭/封口/写出结果全消费，SUCCESS 遇清理或证据失败降级 4，result 以最终码写出（无 0-in-file/4-in-process 分裂），outer findings/seal 禁止 exit 0，driver Findings 由 case 消费；R1-05 SetHandleInformation 检查、attrList 分配/初始化分离且 Delete 先于 pin 释放、LaunchChild 异常/失败统一 ReleaseFailedLaunch、C6 关闭失败保留句柄、generic runner 自然退出必须确认树安静；R1-06 --selfcheck-layout 强制显式 20/10 预算（解析校验）且 C7 传递；R1-07 C0 绑定先于编译、driver 自身 hash 必需、链路 chain-bind 先于启动、绑定数据一次预计算（WriteRunOpen 零 I/O hash）、bind_targets 真对象数组、原始字节输出+尾行保留；R1-08 日志错误不可逆 evidence-error，Seal 不可掩盖，dispose 失败独立再释放并如实报 writer_not_released；R1-09 引号感知 CRT 风格 '--' 扫描、C3 每孙代 max(t)≥8 截止附近存活证明。"
+  files:
+    - "coder/tools/dskrun.cs（sha256 7e356875281c7f0caf77ba76a1ab73d03df7dc72e3b46b4720e97fcf97f5bef8，87726 字节）"
+    - "coder/tools/outerwatch.cs（sha256 e6a2ddf6f6fdf961e52fbc735512ab845ac49822114a5c5864ac85402d549c5e，48276 字节）"
+    - "coder/tools/dsksample.cs（sha256 7d954ef8c82db91c7e863f0009b92817eba900dde627d5101cb23a852dd14f74，11318 字节；与 rework1 字节一致，本轮零改动）"
+    - "coder/selftest/run-selftests.cs（sha256 74f2877e6a2263620ec7421d2b7f93f6069175e41c41695be25cc8f51446cd15，79946 字节）"
+    - "coder/selftest/scenarios.md（sha256 b6aa086167a1ac93d840794485b9e88b9758a83641bd2cc73b8bde96e8a5ba43，8028 字节）"
+    - "coder/README.md（sha256 b35096325953563e40e3fa6cbe2c8013e4a98666bbfddea94c9db626fe31d30a，18679 字节）"
+    - "evidence/candidate-text-rework2-hashes.json / candidate-text-rework2-r1-mapping.json / candidate-text-rework2-static-checks.json（新建）"
+    - ".zcode/workflows/tasks/DSK-004-RP4-S1-resume-01.yaml（仅追加本节）"
+  checks: "17/17 PASS（candidate-text-rework2-static-checks.json）：主仓 HEAD/status（含 review-01/02 两份主会话管理文件）、620 路径逐一 sha256、两行 provider diff、两个快照+全部 6 份旧证据 hash 保护、令牌/括号扫描、R1-01 签名与可见性、R1-02..R1-09 源码构造核验、白名单清单（验证根 41 文件零多余，含两快照内容）、rework2 hash 重算、产物过滤。本轮检查器自身出现三次模式缺陷（注释剥离探针/运行时 JSON 文本探针/字面量缺 --），均已更正并以修正条目为准，superseded FAIL 条目移除并在 checker_notes 注明。"
+  unchanged: "F5 48 字节布局与 f5-layout 证据保持（独立审查已确认）；ST-02 保持；两快照与全部旧 evidence 只读；dsksample.cs 本轮零改动；运行门 BLOCKED；outerwatch 仍为未审未运行候选；父 rework_rounds=1；S5_DESKTOP_BLOCKED、人工 PENDING 保持。"
+  not_run: "编译、--selfcheck-layout、C0—C8+C1d、outerwatch 端到端、真实外层击杀、产品测试/build/prepare/桌面、进程扫描/终止、下载、运行时 ABI 证明——全部未执行。启发式扫描不是编译证明；REWORK1 的同类检查曾被证伪，本轮已降级为辅助证据。"
+  blockers: "无新增架构/依赖/预算/验收变更需求；未触发 BLOCKED 转 planner 条件。"
+  review_focus: "1) Budget/Program 解耦后检查点链是否仍覆盖全部路径（含 C7 全链）；2) Ledger keep-on-fail 与 CloseAll 的最终一遍语义；3) FinalizeRun 每步独立异常后退出码仍正确；4) 三层 deadline 表与代码一致性（无隐藏附加窗）；5) result 提交协议（先定码、后写文件、失败兜底、更正行）；6) 引号感知扫描与 driver '--' 契约；7) C3 t>=8 断言与 fixture 行为一致性；8) 本轮新引入代码的 C#5 兼容性（仍非编译证明）。"

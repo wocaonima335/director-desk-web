@@ -1,7 +1,7 @@
 ---
 name: director-planner
 description: 为 DirectorDesk 二次开发核实源码、拆分任务、制定实施方案和验收标准；不修改业务代码。
-model: "bc04ac19-fada-40be-a01f-54a270bba93f/gpt-6-astra"
+model: "6551fef7-9ece-4c0c-9adf-c79b00e991d9/gpt-6-astra"
 tools: [Read]
 injectAgentsMd: true
 maxTurns: 40

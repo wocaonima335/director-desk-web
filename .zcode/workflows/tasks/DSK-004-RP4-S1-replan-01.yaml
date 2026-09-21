@@ -1,0 +1,49 @@
+task_id: DSK-004-RP4-S1-replan-01
+title: "S1共享生命周期核心：T1至T4文本重规划"
+status: REPLAN # T1两轮后停补丁；协调任务等待新批准，T2-T6不推进
+source_root: "E:/myProgram/DirectorDesk/director-desk-web"
+base_commit: "2d23931239b98bcd28e91ae256dbc9e0135fc955"
+predecessor: "DSK-004-RP4-S1-resume-01：两轮文本返工，最终REPLAN，不改回READY，不第三轮补丁"
+parent_task: DSK-004-RP4
+parent_rework_rounds: 1
+approval:
+  approved: true
+  reference: "ExitPlanMode《S1 重规划：共享核心、分段静态验收》已批准"
+  plan: ".zcode/plans/plan-sess_eb0067fe-a560-495d-9531-9beb2e0d04fe.md"
+  scope: "仅T1-T4文本实现、静态审查和必要管理记录；T5编译/T6运行未批准"
+initial_worktree: "两份agent各一行provider，审批工具更新plan，旧关联任务及三份review报告未跟踪；均为继承管理增量，生产零修改。"
+verification_root: "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01/replan-01"
+baseline:
+  path: "E:/myProgram/DirectorDesk/verify-rp4-s1-resume-01/replan-01/evidence/baseline.json"
+  sha256: "42db7469d12fcddf3702cfd60a89a5e03a936c5a74bc6373a5b237b9bf157d92"
+  scope: "624主仓路径、51旧候选/证据路径；新根排他创建，祖先非reparse；相对旧620基线唯一变化为获批plan工具更新"
+contract_version: "产品公共契约不变；工具内部新规则以获批计划冻结"
+goal: "一份共享核心+两个薄入口，T1-T4每任务独立静态PASS后串行推进"
+tasks:
+  - {id: T1, title: "纯状态、期限、结果规则", state: REPLAN}
+  - {id: T2, title: "唯一资源owner和原生适配", state: WAIT_T1}
+  - {id: T3, title: "预绑定、封存和消费者", state: WAIT_T2}
+  - {id: T4, title: "薄入口和场景接入", state: WAIT_T3}
+  - {id: T5, title: "仅编译", state: BLOCKED_NOT_APPROVED}
+  - {id: T6, title: "真实故障验证", state: BLOCKED_NOT_APPROVED}
+allowed_changes:
+  - "新根内各单任务明确列出的文件，必要设计说明及追加证据"
+  - "本协调记录、T1-T4任务/审查记录、获批RP4进度管理记录"
+non_goals:
+  - "不修改旧候选/旧证据/旧任务历史，不新增监督层，不改生产/桌面/依赖/公共契约"
+  - "不编译/import/load/run候选、自检、probe、产品测试/build/prepare或进程操作"
+  - "不安装下载、不commit/push、不扩预算/弱化验收"
+execution:
+  writer: director-coder
+  reviewer: director-reviewer
+  mode: "单任务串行，静态PASS才推进；接口或白名单变化先停下确认"
+  evidence: "检查器版本、命令、原始输出/退出码逐次保存；包括失败，不覆盖不删条目"
+  historical_limit: "旧三次检查器FAIL原记录未恢复；不以notes代原始证据"
+stop_conditions:
+  - "任何已通过模块接口变更、额外文件、架构、依赖、预算或验收变化先报告"
+  - "各任务两轮返工未过转规划，不以关联任务新建隐形清零历史"
+  - "可信外层未核实；静态通过也不解锁编译/运行"
+rollback: "只精确撤新方案增量，保留失败证据；不reset/clean"
+review:
+  verdict: PENDING
+  unverified: ["全部编译运行", "可信外层", "S5桌面安全门", "人工验收", "RP4生产F1/F2"]
