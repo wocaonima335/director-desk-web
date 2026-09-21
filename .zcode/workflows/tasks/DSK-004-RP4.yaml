@@ -1,14 +1,24 @@
 task_id: DSK-004-RP4
+latest_s1_replan02:
+  base_commit: 90464eb4253b83ec5d73f256a6c9be28acf672c0
+  approval: .zcode/plans/DSK-004-RP4-S1-replan-02.md
+  verification_root: E:/director-desk/verify-rp4-s1-replan-02
+  n0: '独立PASS，见DSK-004-RP4-S1-replan-02-N0-review-final.md；历史取证缺口保留'
+  n1: '两轮返工最终REPLAN，见DSK-004-RP4-S1-replan-02-N1-review-final.md；停止补丁'
+  n2: NOT_STARTED
+  production: '零修改；父RP4仍REWORK，review.rework_rounds=1保持；不是父第二次全范围复审'
+  next: '只读planner重规划，新方案重新人工批准前不实施，禁止第三轮补丁及自动RP5'
+  evidence_limits: '仓库外证据不随Git同步；中间NOTE转录不是首审最终说明恢复；137旧证据+3输入+3恢复件=143快照'
 title: "objects/service 全路径有界读取"
 status: REWORK # 已冻结；首次全范围审查F1—F5；S1文本两轮REPLAN；T1停补丁；生产返工未开始
 freeze:
-  date: "2026-09-21"
+  date: "2026-09-22"
   requested: "冻结任务，提交进度到远程仓库"
   approval: "负责人明确冻结并提交远程；仅整理记录、提交和普通push；不授权发布或继续实施。"
   branch: "checkpoint/dsk-003-progress"
-  parent: "2d23931239b98bcd28e91ae256dbc9e0135fc955"
+  parent: "90464eb4253b83ec5d73f256a6c9be28acf672c0"
   state: FROZEN
-  remaining: "F1/F2生产未修；F3覆盖/F5取证未闭合；S1文本resume-01与T1均REPLAN；T2-T6未推进；S5_DESKTOP_BLOCKED；人工PENDING；RP5—RP8未进入实施。"
+  remaining: "F1/F2生产未修；S1 replan-02 N0独立PASS、N1两轮REPLAN；contract-split获批未实施；N2—T6未推进；S5_DESKTOP_BLOCKED；人工PENDING；RP5—RP8未进入实施。"
   simplified_trial: "用户选择本机桌面试跑，但完整精简方案未获批准、未执行；冻结取代继续试跑。"
   evidence: "原始证据、S1工具及自检在仓库外本机目录，仅报告路径，不随Git上传；不追认缺失历史。"
   execution: "冻结阶段不测试、不构建、不运行产品或清理探针；不宣称已认证当前零遗留进程；提交号与推送结果以Git实际核验为准。"

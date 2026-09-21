@@ -1,0 +1,99 @@
+task_id: DSK-004-RP4-S1-replan-02-N0
+title: 新隔离根与当前保护基线
+status: READY
+source_root: E:/director-desk/director-desk-web
+base_commit: 90464eb4253b83ec5d73f256a6c9be28acf672c0
+initial_worktree: '拉取后干净；开工前管理增量为宿主plan-sess_74095f29-ff55-49ce-bdd8-bb0bcaf62f97.md、批准方案索引及本任务单。coder须记录实际完整status。'
+contract_version: 产品不变，仅证据基线
+approval:
+  approved: true
+  reference: '本会话ExitPlanMode批准；.zcode/plans/DSK-004-RP4-S1-replan-02.md及其链接的完整原文'
+parent_task: DSK-004-RP4
+historical_rework: '父RP4=1；旧S1两轮REPLAN及旧T1两轮REPLAN保留，不重置'
+verification_root: E:/director-desk/verify-rp4-s1-replan-02
+protected_old_root: E:/director-desk/verify-rp4-rework1-ec5469ba
+goal: 排他建立新根，冻结实际现存仓库与旧工具材料，建立可信且不补造历史的检查证据格式
+context_files:
+  - AGENTS.md
+  - .zcode/plans/DSK-004-RP4-S1-replan-02.md
+  - .zcode/plans/plan-sess_74095f29-ff55-49ce-bdd8-bb0bcaf62f97.md
+  - .zcode/workflows/tasks/DSK-004-RP4-S1-replan-01-T1-review-03.md
+allowed_changes:
+  - E:/director-desk/verify-rp4-s1-replan-02/evidence/
+  - .zcode/workflows/tasks/DSK-004-RP4-S1-replan-02-N0.yaml（仅implementation交接追加）
+non_goals:
+  - 不写DESIGN或核心案例；本调用仅N0
+  - 不执行任何候选或旧脚本，不编译或跑产品测试
+  - 不修改旧根、生产、配置、依赖及其他任务；不commit/push
+acceptance:
+  - id: P1
+    criterion: 新根未占用，祖先与实际枚举路径无未处理重定向，排他创建，保护对象路径准确
+    evidence_required: 实际路径与reparse核查输出，失败则停止且不覆盖
+  - id: P2
+    criterion: 实际tracked和untracked源码文件及全部旧工具根材料枚举并hash；不追溯为旧624/51清单；ignored依赖和生成物不得混称源码基线
+    evidence_required: baseline manifest含范围、路径、hash、HEAD、状态、缺失项、例外与数量；无符号链接逃逸
+  - id: P3
+    criterion: 检查器输入及脚本版本冻结，完整实际命令/cwd/解释器版本/原始输出/即时退出来源可追溯，失败只追加
+    evidence_required: 每次独立尝试目录；未知退出明确未知，不依据内容补记为即时OS事实
+  - id: P4
+    criterion: 收尾保护检查无非授权变化，旧失败与本机差异来源记录准确
+    evidence_required: 新基线复核及完整status；本任务交接改变单列为授权管理增量
+verification:
+  - command: 'git rev-parse HEAD；git status --porcelain=v1；标准库文件枚举和SHA256；保存后运行新建保护检查器（仅文件/Git/hash操作）'
+    cwd: E:/director-desk/director-desk-web
+    expected_result: 基线与收尾一致，实际命令由coder原样登记，不执行任何C#逻辑
+side_effects_approved: [新根排他目录与证据文本写入, 本任务implementation追加]
+dependencies: [人工计划已批准, 主会话预检通过但创建前须复核]
+stop_conditions: [路径占用或重定向无法解释, 保护范围不明或未授权变化, 超范围请求, 模型不可用]
+rollback: 停止派发，保留基线和失败证据，不清理旧根，不删除既有文件
+implementation:
+  agent: director-coder
+  handover_note: >-
+    coder agent_fbf9c744-013c-42de-92d8-93a4a8d97902 (GLM), 2026-09-21. Only this
+    implementation block was modified in this file; approval/goal/acceptance fields
+    untouched. Canonical evidence root: E:/director-desk/verify-rp4-s1-replan-02/evidence
+    (see README.md there). This yaml edit itself is the authorized management delta
+    recorded in evidence/handover/authorized-delta.txt and validated by the final
+    protection check (attempts/attempt-05-final-protect-check).
+  changed_files:
+    - E:/director-desk/verify-rp4-s1-replan-02/evidence/preflight/recheck.ps1
+    - E:/director-desk/verify-rp4-s1-replan-02/evidence/preflight/attempt-01/ (stdout/stderr/exit-code/cmd/cwd/interpreter/create-exit-code/preflight-pre-exit-code/started/ended)
+    - E:/director-desk/verify-rp4-s1-replan-02/evidence/tools/build-baseline.ps1
+    - E:/director-desk/verify-rp4-s1-replan-02/evidence/tools/protect-check.ps1
+    - E:/director-desk/verify-rp4-s1-replan-02/evidence/checker/checker-manifest.txt
+    - E:/director-desk/verify-rp4-s1-replan-02/evidence/attempts/attempt-02-baseline/ (FAILED attempt, retained append-only)
+    - E:/director-desk/verify-rp4-s1-replan-02/evidence/baseline/ (partial frozen output of failed attempt-02, retained)
+    - E:/director-desk/verify-rp4-s1-replan-02/evidence/attempts/attempt-03-baseline-fixed/
+    - E:/director-desk/verify-rp4-s1-replan-02/evidence/baseline-attempt-03/ (canonical baseline)
+    - E:/director-desk/verify-rp4-s1-replan-02/evidence/attempts/attempt-04-first-protect-check/
+    - E:/director-desk/verify-rp4-s1-replan-02/evidence/attempts/attempt-05-final-protect-check/
+    - E:/director-desk/verify-rp4-s1-replan-02/evidence/handover/authorized-delta.txt
+    - E:/director-desk/verify-rp4-s1-replan-02/evidence/README.md
+  checks:
+    - id: preflight+exclusive-create (attempt-01)
+      command: powershell New-Item exclusive create; recheck.ps1 saved verification
+      result: create exit 0 (CREATED); recheck RESULT=PASS exit 0; ancestors and old root reparse=False; E:\myProgram ABSENT
+    - id: baseline-freeze (attempt-03; attempt-02 FAILED and retained)
+      command: git captures (8 commands, all exit 0) + build-baseline.ps1
+      result: RESULT=PASS exit 0; HEAD 90464eb4253b83ec5d73f256a6c9be28acf672c0; baseline 632 files (629 tracked + 3 untracked) SHA256+size; ignored 19148 listed separately, excluded from source baseline; repo 19 reparse dirs (tmp junctions) recorded, 0 errors, 0 escapes; index modes all 100644; old root 869 files hashed, 0 reparse/error; legacy E:\myProgram tree ABSENT recorded, not faked; manifest explicitly NOT a retroactive 624/51 claim
+    - id: first-protect-check (attempt-04)
+      command: protect-check.ps1 vs baseline-attempt-03
+      result: RESULT=PASS exit 0; 632/632 hashes match; old-root 869/869 match; status-porcelain identical; reparse set unchanged; no escape
+    - id: final-protect-check (attempt-05, after authorized yaml handover append)
+      command: protect-check.ps1 -AuthorizedDeltaFile evidence/handover/authorized-delta.txt
+      result: recorded verbatim in evidence/attempts/attempt-05-final-protect-check/ and evidence/README.md
+  rework_round_1:
+    review: .zcode/workflows/tasks/DSK-004-RP4-S1-replan-02-N0-review-01.md (REWORK; registered authorized management increment, hash in evidence/r1/authorized-management-increments.txt)
+    pre_r1_bytes_frozen: evidence/r1/frozen-pre-r1/ (task yaml 636da93c…, v1 scripts, README)
+    R1_new_capture_attempt: evidence/r1/attempt-06-v2-protect-check/ (pre-run freeze of tool/input/delta hashes, full literal commands incl. all redirections and immediate exit capture, no historical backfill)
+    R2_recovery: evidence/r1/session-recovery/preflight-and-create-session-recovery.md (coder session transcript recovery of pre-creation preflight ABSENT output and CREATED line, clearly labelled as model-context recovery, not disk-at-the-time; main-session independent preflight quoted verbatim with resolved value omitted as relayed)
+    R3_fail_closed_checker: evidence/tools/protect-check-v2.ps1 (v1 bytes retained in r1/frozen-pre-r1/; v2 requires complete git exit records all zero, explicit FAIL on missing files, count-conservation checks, registered-increment allowance)
+    R4_pre_bytes_proven: evidence/n0-task-original-from-main-write.yaml recovered by main session from original functions.Write tool input (sha256 36d470a9…, 3522B, coder-verified); diff vs current proves implementation-only changes (evidence/r1/session-recovery/task-yaml-implementation-only-diff.txt); limitations and attempt-02 runtime errors precisely recorded in evidence/r1/session-recovery/r1-limitations-and-attempt02-errors.md
+    delta_chain: evidence/r1/authorized-delta-chain.txt (36d470a9… -> 636da93c… -> post-rework hash)
+  blockers: []
+review:
+  agent: director-reviewer
+  verdict: PENDING
+  findings: []
+  unverified: [候选编译和运行不在范围]
+  rework_rounds: 0

@@ -1,5 +1,20 @@
 # DSK-004-RP4 实施报告：objects/service 全路径有界读取
 
+## 冻结（2026-09-22）：contract-split 获批未实施
+
+负责人冻结并提交远程。planner `agent_6d54a9bb` 重规划获批：停止原 DESIGN 修补，改为 time-v1/result-v1/cases-v1 三个仅文本契约串行独立审查（存档 `.zcode/plans/DSK-004-RP4-S1-contract-split.md`）。获批后未实施即冻结：contracts/ 未创建，无编码、无编译、无产品改动。恢复时从该方案与三个新任务单开始（当前未创建）。
+
+## 最新续接：replan-02 N0 PASS，N1 两轮后 REPLAN
+
+基线90464eb，真实根E:/director-desk/director-desk-web。已批准N0—N2文本路线，本轮N0经独立审查PASS；N1初审及首轮返工REWORK，第二轮最终REPLAN，停止补丁，N2未开始。完整审查见 `.zcode/workflows/tasks/DSK-004-RP4-S1-replan-02-N1-review-final.md`；现任务status/review已由主会话审后登记，不重写coder交接历史。
+
+未闭合：动态父/祖先截止及混合profile；已知父界被放宽与本层Outer遗漏；关键期限案例相位不可达；记录适用性及截断门控冲突；完整独立案例不落实；中间版本NOTE误称最终说明恢复。当前DESIGN sha256 ce0383052d54beed7fdab13b1f322097899f1e125461d77e891684132a696b48，位于E:/director-desk/verify-rp4-s1-replan-02/。原始证据仓库外，不随Git同步。
+
+本机旧verify-rp4-rework1-ec5469ba存在并只读保护；上一机器T1根缺失。N0 PASS、父RP4轮数1、旧S1/T1两条REPLAN保留。独立632/869当前保护通过不能证明设计正确；第二轮143快照=137旧证据+3输入副本+3恢复件。首审最终NOTE仍未恢复，旧缺失版本不追认。
+
+本轮无生产/产品测试/配置/依赖修改，无编译、候选执行、产品测试、commit/push。F1/F2、桌面门与人工验收状态不变。下一步只能由planner重规划并重新人工批准，不第三轮补丁、不自动进入N2或RP5。
+
+
 ## 冻结结论（2026-09-21，覆盖下方过程历史）
 
 **RP4 正式 REWORK；S1 文本候选与 T1 纯规则均独立 REPLAN；生产 F1/F2 未修；S5_DESKTOP_BLOCKED；人工 PENDING。** 按负责人“冻结任务，提交进度到远程仓库”停止实施。分支 `checkpoint/dsk-003-progress`，父提交 `2d23931239b98bcd28e91ae256dbc9e0135fc955`；新提交及推送结果以 Git 核验为准。本检查点不是发布、RP4 PASS 或 DSK-004 完成。

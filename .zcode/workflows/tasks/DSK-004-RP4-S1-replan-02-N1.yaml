@@ -1,0 +1,137 @@
+task_id: DSK-004-RP4-S1-replan-02-N1
+title: 冻结最小纯规则契约
+status: REPLAN # 两轮返工后独立终审未通过，停止补丁；N2不得开始
+source_root: E:/director-desk/director-desk-web
+base_commit: 90464eb4253b83ec5d73f256a6c9be28acf672c0
+initial_worktree: 'N0通过时4项untracked管理文件；随后主会话新增N0-review-final.md和本任务单。全部现存文件先hash冻结，旧基线不改写。'
+contract_version: 新内部纯规则契约待独立静态冻结；产品不变
+approval:
+  approved: true
+  reference: .zcode/plans/DSK-004-RP4-S1-replan-02.md及其链接的ExitPlanMode获批原文
+parent_task: DSK-004-RP4
+verification_root: E:/director-desk/verify-rp4-s1-replan-02
+goal: 用明确的小型状态/资源/身份/时间/结果契约消除旧T1三轮审查中的全部歧义，在写核心之前独立冻结
+context_files:
+  - .zcode/plans/DSK-004-RP4-S1-replan-02.md
+  - .zcode/plans/plan-sess_74095f29-ff55-49ce-bdd8-bb0bcaf62f97.md
+  - .zcode/workflows/tasks/DSK-004-RP4-S1-replan-02-N0-review-final.md
+  - .zcode/workflows/tasks/DSK-004-RP4-S1-replan-01-T1-review-01.md
+  - .zcode/workflows/tasks/DSK-004-RP4-S1-replan-01-T1-review-02.md
+  - .zcode/workflows/tasks/DSK-004-RP4-S1-replan-01-T1-review-03.md
+allowed_changes:
+  - E:/director-desk/verify-rp4-s1-replan-02/DESIGN.md
+  - E:/director-desk/verify-rp4-s1-replan-02/evidence/n1/（仅独立追加文本与文件保护检查证据）
+  - .zcode/workflows/tasks/DSK-004-RP4-S1-replan-02-N1.yaml（仅implementation交接，改前冻结全文）
+non_goals:
+  - 不写core或cases，不编译/执行/转译候选，不跑产品或旧工具
+  - 不实现原生owner/适配/绑定封存接入，不加预算和监督层
+  - 不修改N0证据或已有任务/计划，不写生产、测试、依赖、配置
+acceptance:
+  - id: C1
+    criterion: 明确所有状态、事件、合法迁移、拒绝后的不变性；资源分别建模，不适用与未知分离，非法枚举fail-closed
+    evidence_required: 完整字段域及适用性矩阵；覆盖拒绝有资源、仅管道无Job、未归属根未结束、恢复失败和Running进程No/Unknown
+  - id: C2
+    criterion: 显式单调毫秒，准备前起算R，首次清理固定C；父运行/清理/总截止与预留贯穿；业务严格早于阈值，按时进入可等于阈值，完成严格早于有效截止；登记实际时刻不接受外填OnTime
+    evidence_required: 接口/公式/操作顺序和边界前等于之后、迟入、预留耗尽、回退与溢出示例；自检R10C5外25及短R20C10外40，预留10秒不变
+  - id: C3
+    criterion: 身份、记录码与实际退出、业务期望、资源终态、证据与期限独立，全部必要条件满足才接受；预期失败不能吞清理未知；拒绝原因返回不按值丢失
+    evidence_required: 联合接受真值规则、完整纯接口签名、原因排序去重和全部出口定义；文件0/进程4等反例
+  - id: C4
+    criterion: N2每条案例完整独立输入及有序操作，不克隆green基准；全部旧审查问题逐项映射，无未决核心语义
+    evidence_required: 案例规格表与历史findings映射；明确静态推演不等于执行
+  - id: C5
+    criterion: 当前基线和全部旧证据保护，文本检查真实来源可追溯，失败追加且运行前冻结实际完整入口
+    evidence_required: 文件集合/hash/完整实际调用/输出与即时退出；不能用注释代替实际捕获语句，检查器仅文件/Git/hash/文本，不解释业务规则
+verification:
+  - command: '静态阅读DESIGN；只读Git/文件/hash；如需执行保护检查，实际入口先完整保存，输出只进新evidence/n1排他尝试'
+    cwd: E:/director-desk/director-desk-web
+    expected_result: 没有越界修改，契约完整可由reviewer逐项推演；不称测试通过
+side_effects_approved: [白名单设计文本及追加证据, 本任务implementation追加]
+dependencies: [N0独立PASS, 用户已批准N1及N2串行范围]
+stop_conditions: [契约需改变批准预算或架构, 保护失败, 两轮返工仍未通过转planner, 模型失败不静默替换]
+rollback: 冻结未通过版本和失败证据，不覆盖旧设计与历史；超范围先停
+implementation:
+  agent: director-coder
+  handover_note: >-
+    coder (GLM), 2026-09-21. Only this implementation block modified; pre-edit full
+    bytes frozen at evidence/n1/frozen-pre-n1/task-yaml-pre-edit.yaml
+    (sha256 9c03d5a598203644afcce4918b7c41fd3a7ffae481980ac16ddf3c3602c1b8df, 4421B).
+    All approval/goal/acceptance fields untouched. DESIGN.md is the frozen v1 contract
+    for N2; N2 requires independent static PASS first.
+  changed_files:
+    - 'E:/director-desk/verify-rp4-s1-replan-02/DESIGN.md (v1 冻结契约: §1封闭常量 R10/C5/外25+R20/C10/外40+预留10000; §2显式单调ms/EffectiveL与EffectiveS/等号边界/登记时刻无外填OnTime/回退溢出拒绝; §3九相状态机+14个纯函数签名+固定检查顺序+全出口表+拒绝后逐字段不变; §4事实适用性矩阵Unknown≠N/A含仅管道无Job/未归属根未结束/恢复失败/Running改写被拒; §5两维身份+记录码观察码分离; §6联合接受合取+45项闭域原因码全序去重+预期失败不豁免清理未知; §7收集器引用语义义务; §9完整独立案例规格28条含逐步期望; §10旧审查T1-01..06/R1-01..06/R2-01..04逐项映射; §11 N0教训四条落地; §12未验证声明)'
+    - 'E:/director-desk/verify-rp4-s1-replan-02/evidence/n1/ (frozen-pre-n1任务单前字节与manifest; authorized-increments-n1-pre/post; attempts/attempt-01-pre-write-protect-check与attempt-02-post-write-protect-check完整台账; README.md)'
+    - '本任务单 implementation 块（本追加，唯一仓库内改动）'
+  checks:
+    - id: attempt-01-pre-write-protect-check
+      command: 'git 4项捕获(每条后printf "%?"实际语句) + protect-check-v2.ps1 -AuthorizedIncrementsFile evidence/n1/authorized-increments-n1-pre.txt'
+      result: 'RESULT=PASS; exit 0; stderr 0字节; HEAD匹配; 632/632基线一致; 旧根869/869一致; 3/3授权增量验证; delta链linked(36d470a9→0402849121…); reparse 19不变零逃逸; 入口与输入hash先冻结(cmd.txt/inputs-hashes.txt)'
+    - id: attempt-02-post-write-protect-check
+      command: '同v2检查器, -AuthorizedIncrementsFile evidence/n1/authorized-increments-n1-post.txt (N1任务单后hash)'
+      result: 'RESULT=PASS; exit 0; stderr 0字节; 写入DESIGN.md与evidence/n1后仓库与旧根仍零变化; N1任务单后hash与increments声明一致; 见attempts/attempt-02-post-write-protect-check/'
+  checks_not_run: ['编译', '案例执行', '静态推演（属reviewer职责）', '旧工具/探针/产品测试（禁止）']
+  blockers: []
+  review1:
+    verdict_received: REWORK (N1-01..06; .zcode/workflows/tasks/DSK-004-RP4-S1-replan-02-N1-review-01.md, sha256 8d6103c6…)
+    pre_freeze: evidence/n1/rework1/frozen-pre-r1/ (DESIGN v1 full copy 8a4176a7… 37097B + manifest; closes review-01 noted gap of post-attempt02 v1 edits having no frozen pre-version — original gap retained, not retroactively cured)
+    design_v2: sha256 99c70334… 52830B, frozen before attempt-04, untouched after
+    coder_manual_traces: >-
+      coder performed step-by-step static reasoning per finding before writing: N1-01 traced
+      child L/S under parentL=10000/parentS=null vs parent-established-14500 (freeze rule);
+      N1-02 traced C-S09 seal reachability with F12 required gated on F5=Yes; N1-03 traced
+      existence vs confirmation classes incl. BRef(Unknown,Unknown)->[26,27], BRef(No,No)
+      acceptable, pipes-only/job-only/no-resource resolution windows; N1-04 traced Evaluate
+      exits (domain-invalid->[15], unsealed->[9]), RunOutcome null-Reason success, NewIdle
+      defaults, rid-null policies; N1-05 traced gating 5a/5b/6b/6c/7a producing [7,21,24,38]
+      for C-R10, [24] without [25] for C-R06, [23] without [25] for C-R04; N1-06 re-expanded
+      all cases standalone with monotone times (fixed C-T02/C-R10 regression bugs and C-T09
+      phase-order control), BCl reasons, Out wherever F12=Yes, all 8 EV fields explicit,
+      C-S12 changed to expected-failure-4-met + cleanup-unknown.
+    changed_files:
+      - 'DESIGN.md v2 REWORK1 (99c70334…, 52830B): §2.5/2.9/3.4 父S冻结传递与Start父链规则; §4 存在/确认类分立+F12必填门控F5; §6.1 条件3a/3b/5a/5b/6b/6c/7a显式门控+EM=ExpectationResult; §6.2 原因码47项(+26 PipesCreationUnknown,+27 JobCreationUnknown,后续顺移); §3.3 全15静态函数带RunRecord首参+RunOutcome可空Reason+NewIdle默认表; §5.5 rid=null政策; §9 全案例独立展开(新增C-S13/S13b/S14/S15/C-T07b/C-R12); §10.1 N1-01..06映射'
+      - 'evidence/n1/rework1/ (frozen-pre-r1、authorized-increments-r1.txt与-r1-final.txt、attempts/attempt-03..05、本README追加)'
+      - '本任务单 implementation.review1 追加（本轮唯一仓库内改动）'
+    checks:
+      - 'attempt-03 pre-r1 protect: RESULT=PASS exit0 stderr空; 4/4增量(含review-01 8d6103c6); 632/632; 869/869'
+      - 'attempt-04 post-DESIGN protect: RESULT=PASS exit0 stderr空; inputs-hashes含冻结v1(8a4176a7)与v2定稿(99c70334); 仓库与旧根零变化'
+      - 'attempt-05 final protect: 任务单implementation追加后, 见attempts/attempt-05-final-protect-check/'
+    not_claimed: [静态推演正确性终审(reviewer职责), 编译, 案例执行, N2开始]
+    blockers: []
+  review2:
+    verdict_received: REWORK (R1-01..06; .zcode/workflows/tasks/DSK-004-RP4-S1-replan-02-N1-review-02.md, sha256 a6f02733…)
+    pre_freeze: evidence/n1/rework2/frozen-pre-r2/ — FULL-BYTE snapshot (143 files with manifest): DESIGN v2 99c70334…(51755→见design-v3-final-hash链)、任务单 546c3ef7… 全文、review-02 副本 a6f02733…、n1 证据历史全量（含 attempts 全部 cmd/stdout/stderr/exit-code）；corrections-r1-06.txt 更正 attempt-05 stderr 描述（实为 PowerShell 缺目录/缺输入错误）并记录三项恢复
+    recoveries: 'task-yaml c9fcf81b…(6876B) 由当前文件字节拼接恢复并逐字节 hash 验证相等（recovered/task-yaml-c9fcf81b.recovered.yaml，事后恢复非运行时快照）；design-final-hash v1 五条 NOTE 与 README 创建版从事后真实工具输入逐字恢复（recovered/）'
+    design_v3: sha256 ce038305… 51755B，attempt-08 前冻结，其后未改
+    coder_manual_traces: >-
+      R1-01 traced current-propagation at Start/business/first-cleanup (ceiling=min(L,父S)),
+      failure-entry EffectiveS freezing, monotonicity proof for late-appearing parent S
+      (后现必更松), counterexample child1 seal 14700 vs 父S14500 → 拒[8] (C-T07b), 父S<L/
+      超期/等号 → 拒[47] (C-T07c), 多级链 8000 (C-T07d); R1-02 traced F5=Yes⇔Stage=
+      Completed invariant + [48] (C-S16), events-vs-setter matrix unification (C-S05/S14/S15
+      F3=No legal); R1-03 traced ExitObservation/ExpectationResult+Unknown separation and
+      §6.1b truth table (C-R06 EM=Unknown, C-R13 placeholder-immunity [24] vs [20]);
+      R1-04 traced non-generic RunOutcome, controlled construction, null/default policies,
+      per-exit verdict fields; R1-05 fixed phase assertions (C-T02/T10 CreatedNotOwned),
+      C-S03 S=5500 frozen at entry, C-R11 EV2 EM=NA, inlined all prefixes, global time order;
+      R1-06 full-byte freeze + verified recovery + honest corrections.
+    changed_files:
+      - 'DESIGN.md v3 REWORK2 (ce038305…, 51755B): §2.5/2.6/2.9 父界贯穿(ParentBounds每调用当前界+单调性证明+EffectiveS冻结于首次清理)；§3.3 非泛型RunOutcome+ParentBounds参数+受控构造；§3.4 ⑥b ParentDeadlinePassed[47]+失败事件记账；§4 F5=Yes⇔Completed不变量+[48]；§5.5/§6 ExitObservation与EM四值分离+真值表；§6.2 原因码49项(+47,+48)；§9 案例全独立展开(新增C-T07c/07d/S16/R13,重写C-T07/07b)；§10.2 R1-01..06映射'
+      - 'evidence/n1/rework2/ (frozen-pre-r2 全文快照与manifest、recovered/ 三项恢复、corrections-r1-06.txt、design-v3-final-hash.txt、authorized-increments-r2-pre/-final、attempts/attempt-07..09、README-r2.md)'
+      - '本任务单 implementation.review2 追加（本轮唯一仓库内改动）'
+    checks:
+      - 'attempt-07 pre-r2 protect: RESULT=PASS exit0 stderr空; 5/5增量(含review-02 a6f02733); 632/632; 869/869'
+      - 'attempt-08 post-DESIGN protect: RESULT=PASS exit0; DESIGN v3 ce038305 定稿后仓库旧根零变化'
+      - 'attempt-09 final protect: implementation.review2 追加后, 见attempts/attempt-09-final-protect-check/'
+    not_claimed: [静态推演正确性终审(reviewer职责), 编译, 案例执行, N2开始]
+    blockers: []
+review:
+  agent: director-reviewer
+  reference: agent_18e3a107-2c2e-4c9e-be5f-afed1e464c03
+  verdict: REPLAN
+  report: .zcode/workflows/tasks/DSK-004-RP4-S1-replan-02-N1-review-final.md
+  findings: [混合profile推翻父界更松证明, 已知父界可放宽且Outer遗漏, 父链案例状态不可达, 记录适用性与截断门控冲突, 案例仍非完整独立, 中间说明误称最终说明恢复]
+  unverified: [编译, 案例执行, 原生适配和运行可信性, 历史缺失全文和执行版本]
+  rework_rounds: 2
+  precedence: '终审覆盖implementation内已闭合/全部内联/最终说明已恢复的冲突声明；历史保留。N0 PASS保持，父RP4轮数1不变。'
+  management_registration: '主会话审后登记status/review；审前任务和DESIGN全文另存evidence/n1/coordinator-final-review，hash匹配独立终审版本。此管理增量不冒称原检查已覆盖。'
+  next: '只读director-planner重规划，新方案重新人工批准前不得实施，不第三轮补丁，不进入N2。'
