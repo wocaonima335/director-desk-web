@@ -1,4 +1,5 @@
-import { setSelectedEntities } from './editor/timeline-selection.ts';
+import { clearTimelineSelection, selectedClips, setSelectedClips, setSelectedEntities } from './editor/timeline-selection.ts';
+import type { TimelineSelection } from './clip-editing.ts';
 import { mountApplicationMenu } from './ui/application-menu.ts';
 import { saveProjectFile } from './ui/project-save.ts';
 import { mountFileLocations } from './ui/file-locations.ts';
@@ -27,8 +28,10 @@ import type { Action, Entity, Project, Vec3 } from './model.ts';
 import { assertProject, clone } from './model.ts';
 import { autosave, recover } from './storage.ts';
 import { SceneWorkspace } from './scenes/scene-workspace.ts';
+import type { ModelCatalogState } from './resources/scene-models.ts';
+import { applyWholeDocument, WriteGate, type WholeDocumentPorts } from './scenes/document-apply.ts';
 import { RecoveryAutosave } from './editor/recovery-autosave.ts';
-import { ManagedProjectController, leaveManagedBeforeSwitch } from './editor/managed-project.ts';
+import { ManagedProjectController, leaveManagedBeforeSwitch, switchManagedCandidate } from './editor/managed-project.ts';
 import { mountProjectLibrary } from './ui/project-library.ts';
 import { readSceneDocument, projectForScene, type SceneDocument } from './scenes/sequence-project.ts';
 import type { SceneContext } from './scenes/sequence-session.ts';
@@ -60,6 +63,11 @@ let draft: {
     id: string;
 } | null = null;
 const history = new SceneWorkspace(project, () => ({ time, selected, preview }));
+// RP6: one gate shared by EVERY mutating write entry (change(), transform drag, undo/redo, live
+// fields, path drawing, timeline drag, model recording and the whole-document apply). It is set
+// only when a whole-document apply failed AND its rollback failed too; the editor then refuses
+// writes until restart, so the broken editor can never fake a recovered state.
+const writeGate = new WriteGate();
 // DSK-004: managed sessions persist only through explicit snapshots; legacy IndexedDB recovery
 // stays disabled while a managed session is active, and is cancelled/drained on project switches.
 const managed = new ManagedProjectController(window.directorDesktop?.dsk
@@ -68,7 +76,7 @@ const recoverySave = new RecoveryAutosave(force => autosave(() =>
     history.pending || draft || engine.dragging || engine.exporting || busy && !force ? null : history.document()),
     () => { $('#save-status').textContent = '自动恢复已保存'; },
     () => { $('#save-status').textContent = '请手动保存项目'; toast('自动恢复保存失败，请导出项目文件备份', true); },
-    500, () => !managed.managedActive);
+    500, () => !managed.managedActive && !writeGate.blocked);
 async function drainRecovery() { await recoverySave.drain(); }
 let inspectorSeekTimer: ReturnType<typeof setTimeout> | undefined;
 let aborter: AbortController | null = null;
@@ -76,8 +84,10 @@ let transformError: Error | undefined;
 mountLayout(project);
 const engine = new Engine(project, $('#stage-canvas'), $('#shot-canvas'), {
     select: selectEntity, point: i => { engine.select(selected, i); inspectorTab = 'path'; renderInspector(); }, ground: addGroundPoint,
-    transformStart: () => { transformError=undefined; playing = false; history.begin(project); const e = current(); if (e?.camera && e.camera.mode !== 'free') freezeCamera(engine, e); },
+    transformStart: () => { if (writeGate.blocked) { toast(writeGate.denial()!, true); return; } transformError=undefined; playing = false; history.begin(project); const e = current(); if (e?.camera && e.camera.mode !== 'free') freezeCamera(engine, e); },
     transform: (p, r, s) => {
+        // RP6: an in-flight gizmo drag must never keep writing past a failed rollback.
+        if (writeGate.blocked) { transformError ??= Error(writeGate.denial()!); return; }
         const e = current();
         if (!e || transformError)
             return;
@@ -105,6 +115,7 @@ const engine = new Engine(project, $('#stage-canvas'), $('#shot-canvas'), {
         engine.sample(time);
         engine.refreshHelpers();
     }, transformEnd: (cancel=false) => {
+        if (writeGate.blocked) cancel = true; // a blocked editor may only roll the drag back.
         try {
             if(cancel || transformError)throw transformError ?? new Error('已取消拖动');
             assertLockedEntitiesUnchanged(history.pending!,project);assertProject(project);
@@ -127,7 +138,7 @@ else {
     engine.refreshHelpers();
 } engine.select(selected, engine.selectedPoint); renderPanels(); engine.externalModels.retain([project, ...history.undoStack, ...history.redoStack]); recoverySave.request(); }
 function change(fn: () => void, rebuild = true): boolean { if (busy)
-    return false; if (draft || history.pending) { toast('请先完成或取消当前绘制／拖动操作'); return false; } playing = false; const original = project; history.begin(project); try {
+    return false; if (writeGate.blocked) { toast(writeGate.denial()!, true); return false; } if (draft || history.pending) { toast('请先完成或取消当前绘制／拖动操作'); return false; } playing = false; const original = project; history.begin(project); try {
     fn();
     if (project === original) { syncFloorElevations(project, history.pending!); syncStructureLinks(project, history.pending!); }
     if (project === original) assertLockedEntitiesUnchanged(history.pending!, project);
@@ -284,16 +295,90 @@ async function leaveManagedForSwitch(reason: string): Promise<boolean> {
     if (decision.stage === 'leave') toast(`离开受管会话失败，已保留原项目与受管状态：${decision.error instanceof Error ? decision.error.message : String(decision.error)}`, true);
     return false;
 }
+/** RP6: whole-document apply is transactional. A refused guard changes nothing; every failure
+ * after the capture — model readiness, the document swap itself or the first presentation — is
+ * rolled back to the exact previous document, history, views, resources and managed epoch. Only
+ * a FAILED rollback enters the explicit write-blocked state; the outcome never fakes recovery. */
+interface AppliedDocumentSnapshot {
+    history: ReturnType<SceneWorkspace['captureDocumentState']>;
+    models: ModelCatalogState;
+    // RP6-R03: the captured view includes the transient editor state too — playback flag,
+    // path-point selection and the timeline clip selection — so a swap-stage failure restores
+    // them EXACTLY as captured instead of unconditionally clearing them.
+    view: { time: number; selected: string; preview: string; inspectorTab: string;
+        playing: boolean; selectedPoint: number; clips: TimelineSelection[] };
+    dirty: boolean;
+    revision: number;
+    epoch: number;
+}
+const documentApply: WholeDocumentPorts = {
+    guard: () => {
+        writeGate.refuse();
+        if (draft || history.pending || engine.exporting) throw Error('请先完成当前编辑或导出');
+    },
+    // Read-only: readiness of every scene of the candidate; nothing visible may change here.
+    prepare: document => {
+        for (const scene of document.scenes) engine.externalModels.assertReady(projectForScene(document, scene.id));
+    },
+    capture: (): AppliedDocumentSnapshot => ({
+        history: history.captureDocumentState(),
+        // RP6: the transactional capture pins every loaded source, so the apply's own retain()
+        // calls can never dispose resources the old document or its undo/redo history still need.
+        models: engine.externalModels.acquireModelState(),
+        view: { time, selected, preview, inspectorTab, playing, selectedPoint: engine.selectedPoint,
+            clips: selectedClips() }, // selectedClips() already returns detached copies.
+        dirty, revision, epoch: managed.epoch,
+    }),
+    commit: (document, { context, label, resetViews, resetHistory }) => {
+        project = resetHistory ? history.reset(document) : history.replace(document, context, label, resetViews);
+        return project;
+    },
+    present: () => restoreSceneView(),
+    applied: snapshot => {
+        managed.epoch++; // DSK-004: the epoch moves only after the new document is fully shown.
+        // RP6: the new document's history is authoritative now; release the pins and let retain()
+        // retire the previous document's stale sources.
+        engine.externalModels.releaseModelState((snapshot as AppliedDocumentSnapshot).models);
+        engine.externalModels.retain([project, ...history.undoStack, ...history.redoStack]);
+    },
+    rollback: (snapshot, stage) => {
+        const saved = snapshot as AppliedDocumentSnapshot;
+        history.restoreDocumentState(saved.history);
+        engine.externalModels.restoreModelState(saved.models);
+        engine.externalModels.releaseModelState(saved.models);
+        managed.epoch = saved.epoch;
+        project = history.project(); // changed() below rebuilds and retains from this module var.
+        if (stage === 'swap') {
+            // The document had already been replaced: restore the captured view completely —
+            // including the playback flag, path-point selection and clip selection, exactly as
+            // captured (RP6-R03), never an unconditional stop/clear.
+            time = saved.view.time; selected = saved.view.selected; preview = saved.view.preview; inspectorTab = saved.view.inspectorTab;
+            playing = saved.view.playing;
+            if (saved.view.clips.length) setSelectedClips(saved.view.clips); else clearTimelineSelection();
+            engine.selectedPoint = saved.view.selectedPoint; // before changed(): engine.select reads it.
+            changed(); // rebuild + panels + retain: additive candidate resources are disposed here.
+            extendTimelineView(uiContext, time);
+        }
+        // stage 'prepare': the candidate never replaced the document, so the original timeline
+        // clip selection, path-point selection and playback state stay untouched, and no needless
+        // re-presentation or recovery save happens.
+        dirty = saved.dirty; revision = saved.revision;
+        return project;
+    },
+    writeBlocked: (applyError, rollbackError) => {
+        writeGate.block(rollbackError);
+        managed.unconfirmed = true; // DSK-004: the persisted choice can no longer be trusted to match the editor.
+        $('#save-status').textContent = '整档回滚失败 · 已禁写';
+        toast(`整档应用失败且回滚未完成，编辑器已禁写：${applyError instanceof Error ? applyError.message : String(applyError)}`, true);
+    },
+};
 function applyDocument(document: SceneDocument, context: SceneContext, label: string, resetViews = false, resetHistory = false) {
-    if (draft || history.pending || engine.exporting) throw Error('请先完成当前编辑或导出');
-    for (const scene of document.scenes) engine.externalModels.assertReady(projectForScene(document, scene.id));
-    // R5: resetHistory starts a fresh SceneSession, so a managed switch cannot drag the previous
-    // project's undo/redo (and its content) into the new session; plain imports keep replace.
-    project = resetHistory ? history.reset(document) : history.replace(document, context, label, resetViews);
-    managed.epoch++; // DSK-004: the whole document changed; stale async completions must notice.
-    restoreSceneView();
+    const outcome = applyWholeDocument(documentApply, document, context, label, { resetViews, resetHistory });
+    if (outcome.status === 'applied') return;
+    throw outcome.error; // refused / rolled-back / write-blocked all surface the original failure.
 }
 function switchScene(id: string, context: SceneContext) {
+    writeGate.refuse();
     if (draft || history.pending || engine.exporting) throw Error('请先完成当前编辑或导出');
     engine.externalModels.assertReady(history.projectFor(id));
     project = history.switchScene(id, context);
@@ -355,6 +440,8 @@ const uiContext: AppContext = {
     get preview() { return preview; }, set preview(value) { preview = value; },
     get dirty() { return dirty; }, set dirty(value) { dirty = value; },
     get revision() { return revision; },
+    get writeBlockedReason() { return writeGate.denial(); },
+    refuseWrite: () => writeGate.refuse(),
     get busy() { return busy; }, set busy(value) { busy = value; },
     get draft() { return draft; }, set draft(value) { draft = value; },
     get aborter() { return aborter; }, set aborter(value) { aborter = value; },
@@ -389,9 +476,11 @@ engine.select(selected);
 requestAnimationFrame(frame);
 
 /** DSK-004 startup isolation: the persisted managed choice wins over legacy IndexedDB recovery.
- * A managed candidate is only confirmed after download, validation and resource preparation all
- * succeed; failures keep the empty editor and surface the project library instead of loading
- * stale recovery data. Unmanaged sessions keep the original recovery behavior untouched. */
+ * RP7: the managed branch runs the SAME unified candidate protocol as the project library
+ * (staged candidate → download → prepare → RP6 whole-document apply → activate/adopt). A failure
+ * only closes this run's candidate: it never reads legacy recovery, never flips the persisted
+ * managed choice to unmanaged and never touches an unrelated active session. Unmanaged sessions
+ * keep the original recovery behavior untouched. */
 async function startupRestore() {
     if (!managed.available) { legacyRecover(); return; }
     // F08: the editor is busy from BEFORE the bootstrap read — the persisted choice must be
@@ -409,32 +498,28 @@ async function startupRestore() {
             return;
         }
         if (boot?.mode === 'managed' && boot.projectId) {
-            try {
-                const session = await managed.open(boot.projectId);
-                if (!session.current) throw Error('该项目还没有保存的快照');
-                const { document } = await managed.download();
-                await prepareDocumentModels(engine.externalModels, document);
-                // F08: the whole startup load holds busy and verifies nothing moved underneath
-                // before committing the document, the identity or the clean flag.
-                if (history.pending || draft) throw Error('启动期间编辑器忙');
-                if (managed.epoch !== 0 || revision !== 0) throw Error('启动期间工程已变化，请重启应用重试');
-                selectClip(null);
-                project = history.reset(document);
-                selected = history.restoredSelection!; time = 0; preview = 'program';
-                managed.epoch++;
-                engine.selected = selected; engine.rebuild(project);
-                renderPanels();
-                await managed.activate();
-                if (managed.epoch !== 1 || revision !== 0) throw Error('启动期间出现新的编辑，保存状态保持未保存');
-                dirty = false;
+            const result = await switchManagedCandidate(managed, boot.projectId, boot.name ?? '', {
+                revision: () => revision,
+                dirty: () => dirty,
+                editorBusy: () => !!draft || !!history.pending || engine.exporting,
+                confirmDiscard: async () => false, // startup never asks: there is nothing to discard yet
+                drain: drainRecovery,
+                prepare: document => prepareDocumentModels(engine.externalModels, document),
+                apply: document => applyDocument(document, history.context, '打开项目', true, true),
+                markClean: () => { dirty = false; },
+                notify: (message, error) => toast(message, error),
+            }, { confirm: false, startup: true });
+            if (result.status === 'committed') {
                 $('#save-status').textContent = `受管项目：${managed.projectName}`;
-                return;
-            } catch (error) {
-                await managed.closeSession().catch(() => { });
-                toast(`受管项目打开失败：${(error as Error).message}；可通过文件菜单的项目库重试`, true);
-                $('#save-status').textContent = '受管项目打开失败';
-                return;
+            } else {
+                const detail = result.status === 'unconfirmed'
+                    ? '补偿失败，受管状态未确认'
+                    : result.status === 'failed' ? (result.error instanceof Error ? result.error.message : String(result.error))
+                        : '启动期间工程状态已变化';
+                $('#save-status').textContent = result.status === 'unconfirmed' ? '受管状态未确认' : '受管项目打开失败';
+                toast(`受管项目打开失败：${detail}；可通过文件菜单的项目库重试`, true);
             }
+            return;
         }
         // 'unmanaged' or null: an explicit/absent choice — legacy recovery keeps its semantics.
         fallbackToLegacy = true;

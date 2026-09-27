@@ -30,6 +30,9 @@ export class SceneModels {
     private humanRigs = new Map<string, Rig>();
     private basics?: BasicHumanMotion;
     private validRetargets = new Set<string>();
+    /** RP6: sources pinned by an in-flight whole-document apply, keyed by entry identity. Pinned
+     * entries survive every retain() so a failed apply can never restore disposed shells. */
+    private pins = new Set<{ model: LoadedModel; package: ModelPackage }>();
     private loaded(id: string) { const source = this.sources.get(id); if (!source) throw Error('动作模型资源尚未加载'); return source.model; }
     private validateRetargets(project: Project, load: (id: string) => LoadedModel, cache = false) {
         for (const entity of project.entities) if (entity.clips.some(c => c.retarget) || hasBasicHumanMotion(entity)) {
@@ -184,10 +187,48 @@ export class SceneModels {
         entry.instance.applyNodeEdits(entity.external!.nodeEdits);
         entry.instance.setAppearance(monochrome ? 'white' : entity.external!.appearance, entity.color);
     }
-    /** History owns which immutable sources must remain available for synchronous undo. */
+    /** History owns which immutable sources must remain available for synchronous undo. Pinned
+     * sources (an in-flight whole-document apply) are never released here, so a failed apply can
+     * still instantiate the old document's resources — including those only its history holds. */
     retain(projects: readonly { resources?: readonly { id: string }[] }[]) {
         const keep = new Set(projects.flatMap(project => (project.resources ?? []).map(r => r.id)));
-        for (const [id, entry] of this.sources) if (!keep.has(id)) { entry.model.dispose(); this.sources.delete(id); }
+        for (const [id, entry] of this.sources) if (!keep.has(id) && !this.pins.has(entry)) { entry.model.dispose(); this.sources.delete(id); }
     }
-    dispose() { this.clearInstances(); this.sources.forEach(entry => entry.model.dispose()); this.sources.clear(); this.validRetargets.clear(); }
+    /** RP6: source-catalog capture for the whole-document rollback. Entries are replaced wholesale
+     * and never mutated in place, so shallow copies are full fidelity. */
+    captureModelState(): ModelCatalogState {
+        return { sources: new Map(this.sources), retargets: new Set(this.validRetargets) };
+    }
+    /** RP6: transactional capture — additionally pins every captured source for the duration of
+     * the whole-document apply. Old-document and undo/redo-only resources therefore survive the
+     * apply's own retain() calls, and a failed rollback restores still-working models instead of
+     * disposed references. Pair every call with exactly one releaseModelState. */
+    acquireModelState(): ModelCatalogState {
+        const saved = this.captureModelState();
+        for (const entry of saved.sources.values()) this.pins.add(entry);
+        return saved;
+    }
+    /** Release the pins taken by acquireModelState; unpins only the captured entries. */
+    releaseModelState(saved: ModelCatalogState) {
+        for (const entry of saved.sources.values()) this.pins.delete(entry);
+    }
+    /** Restore the catalog exactly: dispose additive leftovers from the failed apply, re-add
+     * anything missing (including a same-ID entry that no longer matches) and restore the retarget
+     * validation cache. Restored entries were pinned by acquireModelState, so they remain real,
+     * instantiable resources. */
+    restoreModelState(saved: ModelCatalogState) {
+        for (const [id, entry] of this.sources) if (!saved.sources.has(id) && !this.pins.has(entry)) { entry.model.dispose(); this.sources.delete(id); }
+        for (const [id, entry] of saved.sources) {
+            const current = this.sources.get(id);
+            if (current !== entry) { if (current && !this.pins.has(current)) current.model.dispose(); this.sources.set(id, entry); }
+        }
+        this.validRetargets = saved.retargets;
+    }
+    dispose() { this.clearInstances(); this.sources.forEach(entry => entry.model.dispose()); this.sources.clear(); this.validRetargets.clear(); this.pins.clear(); }
+}
+
+/** RP6: capture/restore pair for a failed whole-document apply. */
+export interface ModelCatalogState {
+    sources: Map<string, { model: LoadedModel; package: ModelPackage }>;
+    retargets: Set<string>;
 }

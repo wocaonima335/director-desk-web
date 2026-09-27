@@ -13,9 +13,11 @@
 // and detailed per-read telemetry (request/return/cumulative bytes, fstat count, phase order,
 // close result) — not just _lastReadBytes. Close failures are never swallowed: the handle is
 // handed SYNCHRONOUSLY to exactly one owner — the service cleanup ledger through the injected
-// onReadCloseFailure sink, or the independent caller through the thrown error — while the
-// primary read error is preserved alongside the close failure. Business byte budgets and the
-// actual multi-round I/O telemetry are kept strictly separate.
+// onReadCloseFailure sink, or the independent caller through the thrown error, which F1
+// additionally arms with the still-operable handle (error.handle) and, when several handles
+// fail at once, the later close errors chained on error.nextCloseErrors (none dropped) —
+// while the primary read error is preserved alongside the close failure. Business byte budgets
+// and the actual multi-round I/O telemetry are kept strictly separate.
 const fsSync = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
@@ -47,6 +49,17 @@ function tmpName() {
 
 function isAlreadyClosedError(error) {
     return Boolean(error) && (error.code === 'ERR_STREAM_ALREADY_CLOSED' || /already closed/i.test(String(error && error.message)));
+}
+
+/** F1: close failures are never dropped. The FIRST failure stays the primary one; every later
+ * failure is appended to its explicit `nextCloseErrors` list (never overwritten or replaced),
+ * so a caller can still reach — and close — every failed handle. */
+function chainCloseError(first, next) {
+    if (!next) return first;
+    if (!first) return next;
+    if (!Array.isArray(first.nextCloseErrors)) first.nextCloseErrors = [];
+    first.nextCloseErrors.push(next);
+    return first;
 }
 
 /** RP4: a read limit must be a safe, finite, non-negative integer whose +1 sentinel cannot
@@ -120,7 +133,9 @@ function createObjectStore({ root, faults = {}, maxBytes = OBJECT_MAX_BYTES, onR
     }
     /** RP4: close a read-path handle with single-owner semantics. "Already closed" counts as
      * released; a genuine failure is handed SYNCHRONOUSLY to the one ledger owner (when bound)
-     * and returned so the operation can never report success over it. */
+     * and returned so the operation can never report success over it. F1: with NO ledger bound
+     * the independent caller is the single owner, so the still-open handle rides on the error
+     * (explicit `error.handle`) and stays operable for the caller's own close/retry. */
     async function closeOwned(handle, session, which) {
         try {
             await handle.close();
@@ -137,6 +152,8 @@ function createObjectStore({ root, faults = {}, maxBytes = OBJECT_MAX_BYTES, onR
             if (onReadCloseFailure) {
                 aggregate.closeHandoffs += 1;
                 onReadCloseFailure({ transferId: `read-${session.id}:${which}`, stage: 'close', handle, label: which, error });
+            } else {
+                error.handle = handle; // F1: the independent caller explicitly takes the resource over
             }
             return error;
         }
@@ -503,16 +520,19 @@ function createObjectStore({ root, faults = {}, maxBytes = OBJECT_MAX_BYTES, onR
                 }
                 return { digest, length: seen };
             } catch (error) {
-                primaryError = error;
+                primaryError = error && error.reason
+                    ? error
+                    : Object.assign(Error('对象流式复制失败'), { reason: 'io-failure', cause: error });
                 try { if (destOpened) await fsp.rm(destPath, { force: true }); } catch { /* best effort */ }
-                if (error && error.reason) throw error;
-                throw Object.assign(Error('对象流式复制失败'), { reason: 'io-failure' });
+                throw primaryError;
             } finally {
-                let closeError = sourceHandle ? await closeOwned(sourceHandle, session, '流式导出源') : null;
-                const destCloseError = destHandle ? await closeOwned(destHandle, session, '流式导出目标') : null;
-                if (destCloseError && !closeError) closeError = destCloseError;
+                // F1: both handles are settled here and EVERY close failure is preserved — the
+                // first stays primary, later ones are chained on its `nextCloseErrors` list.
+                let closeError = null;
+                if (sourceHandle) closeError = chainCloseError(closeError, await closeOwned(sourceHandle, session, '流式导出源'));
+                if (destHandle) closeError = chainCloseError(closeError, await closeOwned(destHandle, session, '流式导出目标'));
                 if (sourceHandle || destHandle) session.close = closeError ? { ok: false, error: closeError } : { ok: true };
-                else session.close = { ok: true, notOpened: true };
+                else session.close = { ok: true };
                 endSession(session, primaryError);
                 if (closeError) {
                     if (primaryError) {
@@ -520,7 +540,7 @@ function createObjectStore({ root, faults = {}, maxBytes = OBJECT_MAX_BYTES, onR
                     } else {
                         // A verified-looking export whose handle close failed is never published.
                         try { if (destOpened) await fsp.rm(destPath, { force: true }); } catch { /* best effort */ }
-                        if (!onReadCloseFailure) throw closeError; // independent caller takes over
+                        if (!onReadCloseFailure) throw closeError; // independent caller takes over (closeError carries every failed handle)
                         throw Object.assign(Error('对象流式导出句柄关闭失败，资源已移交清理账本'), { reason: 'io-failure', closeError });
                     }
                 }
@@ -532,8 +552,10 @@ function createObjectStore({ root, faults = {}, maxBytes = OBJECT_MAX_BYTES, onR
          * putObject (R8/R2: no full-buffer copy, existing objects must prove their content).
          * RP4: the source is read through the bounded core (handle.stat + 64KiB-capped requests
          * + sentinel), the tmp sink is a partial-write loop, and the existing-target proof is a
-         * BOUNDED read instead of an unbounded readFile. A genuine close failure never publishes
-         * and is handed to the single cleanup owner. */
+         * BOUNDED read instead of an unbounded readFile. F2: BOTH handles (tmp sink, then
+         * source) must close successfully before the rename publishes; a genuine close failure
+         * removes the tmp and is never published or swallowed, and every close failure is
+         * handed to the single cleanup owner. */
         async streamFileToObject(sourcePath, projectId, expectedDigest, expectedLength) {
             const limit = assertBoundedLimit(expectedLength, maxBytes, '备份对象', 'corrupt-object');
             const dir = await ensureTrustedDir('projects', projectId, 'objects');
@@ -555,6 +577,7 @@ function createObjectStore({ root, faults = {}, maxBytes = OBJECT_MAX_BYTES, onR
             let tmpHandle = null;
             let tmpPath = null;
             let primaryError;
+            let closeError = null; // F1: first close failure; every later one is chained, none dropped
             const hash = crypto.createHash('sha256');
             let seen = 0;
             try {
@@ -590,6 +613,7 @@ function createObjectStore({ root, faults = {}, maxBytes = OBJECT_MAX_BYTES, onR
                 const tmpCloseError = await closeOwned(tmpHandle, session, '流式导入目标');
                 tmpHandle = null;
                 if (tmpCloseError) {
+                    closeError = chainCloseError(closeError, tmpCloseError);
                     try { await fsp.rm(tmpPath, { force: true }); }
                     catch (rmError) {
                         if (onReadCloseFailure) {
@@ -597,6 +621,21 @@ function createObjectStore({ root, faults = {}, maxBytes = OBJECT_MAX_BYTES, onR
                         }
                     }
                     throw Object.assign(Error('备份对象临时文件句柄关闭失败，未发布'), { reason: 'io-failure', closeError: tmpCloseError });
+                }
+                // F2: the SOURCE handle must also close successfully BEFORE the rename publishes
+                // the final file — a genuine source close failure removes the tmp (same failure
+                // cleanup as above) and is never published as success, never swallowed.
+                const sourceCloseError = await closeOwned(sourceHandle, session, '流式导入源');
+                sourceHandle = null;
+                if (sourceCloseError) {
+                    closeError = chainCloseError(closeError, sourceCloseError);
+                    try { await fsp.rm(tmpPath, { force: true }); }
+                    catch (rmError) {
+                        if (onReadCloseFailure) {
+                            onReadCloseFailure({ transferId: `read-${session.id}:流式导入tmp`, stage: 'rm', tmpPath, label: '流式导入tmp', error: rmError });
+                        }
+                    }
+                    throw Object.assign(Error('备份对象源句柄关闭失败，未发布'), { reason: 'io-failure', closeError: sourceCloseError });
                 }
                 try {
                     await fsp.rename(tmpPath, finalPath);
@@ -617,17 +656,22 @@ function createObjectStore({ root, faults = {}, maxBytes = OBJECT_MAX_BYTES, onR
                 }
                 throw error;
             } finally {
-                let closeError = sourceHandle ? await closeOwned(sourceHandle, session, '流式导入源') : null;
-                if (tmpHandle) {
-                    const lateTmpCloseError = await closeOwned(tmpHandle, session, '流式导入目标');
-                    if (lateTmpCloseError && !closeError) closeError = lateTmpCloseError;
-                }
-                if (sourceHandle || tmpHandle) session.close = closeError ? { ok: false, error: closeError } : { ok: true };
-                else if (!session.close) session.close = { ok: true };
+                // F1: late-close only the handles the try block never settled; every close
+                // failure — from the try block or here — is preserved, never just the first.
+                if (sourceHandle) closeError = chainCloseError(closeError, await closeOwned(sourceHandle, session, '流式导入源'));
+                if (tmpHandle) closeError = chainCloseError(closeError, await closeOwned(tmpHandle, session, '流式导入目标'));
+                session.close = closeError ? { ok: false, error: closeError } : { ok: true };
                 endSession(session, primaryError);
                 if (closeError) {
-                    if (primaryError) primaryError.closeError = closeError;
-                    else if (!onReadCloseFailure) throw closeError; // independent caller takes over
+                    if (primaryError) {
+                        // F1: never clobber a close failure the primary error already carries
+                        // (thrown from the close settlement above) — chain genuinely new ones.
+                        if (primaryError.closeError && primaryError.closeError !== closeError) {
+                            primaryError.closeError = chainCloseError(primaryError.closeError, closeError);
+                        } else if (!primaryError.closeError) {
+                            primaryError.closeError = closeError;
+                        }
+                    } else if (!onReadCloseFailure) throw closeError; // independent caller takes over (closeError carries every failed handle)
                     else throw Object.assign(Error('备份对象流式导入句柄关闭失败，资源已移交清理账本'), { reason: 'io-failure', closeError });
                 }
             }

@@ -5,6 +5,7 @@
 // All storage semantics live in ManagedProjectController; this module only gates on editor busy
 // state and renders results.
 import type { AppContext } from '../app-context.ts';
+import { createManagedFromCurrent, switchManagedCandidate, type ManagedCandidateSwitchResult } from '../editor/managed-project.ts';
 import { prepareDocumentModels } from '../scenes/document-models.ts';
 import { exportProjectCopy } from './project-save.ts';
 import { $, escape } from './common.ts';
@@ -139,72 +140,51 @@ export function mountProjectLibrary(ctx: AppContext) {
 
     /** R11/F09: uncertain-save closure — reload the current managed project from the library's
      * latest snapshot after its status was reviewed. The live session is REUSED (no close, no new
-     * lease); dirty edits are confirmed before being dropped. */
+     * lease). RP7-A2: this entry adds NO confirmation of its own — the shared switch protocol
+     * below confirms exactly once per user action (the old pre-confirm here dropped a second
+     * prompt on top of openProject's). */
     async function reopenCurrent() {
         if (!guard('重开当前项目') || !managed.managedActive || !managed.projectId) return;
-        const projectId = managed.projectId, name = managed.projectName ?? '';
-        if (ctx.dirty && !await ctx.confirmDiscardEdits('重开当前项目')) {
-            ctx.toast('已取消重开；未保存的修改保留');
-            return;
-        }
-        if (ctx.draft || ctx.history.pending || ctx.engine.exporting) {
-            ctx.toast('确认期间编辑器状态已变化，请重试');
-            return;
-        }
-        await openProject(projectId, name);
+        await openProject(managed.projectId, managed.projectName ?? '', { reason: '重开当前项目' });
     }
 
     async function createFromCurrent(root: HTMLElement) {
         if (!guard('创建受管项目')) return;
+        // RP7-A9/F05: the RP6 write gate blocks the create entry too — a write-blocked editor can
+        // never unlock through identity changes or an activation side effect.
+        if (ctx.writeBlockedReason) { ctx.toast(ctx.writeBlockedReason, true); return; }
         const input = root.querySelector<HTMLInputElement>('#library-new-name');
         const name = (input?.value.trim() || ctx.project.name).slice(0, 80);
         ctx.busy = true; ctx.playing = false; ctx.updateTimeUI();
         try {
             // R6: settle legacy autosave before the candidate session exists ("create无drain").
             await ctx.drainRecovery();
-            const epochBefore = managed.epoch, revisionBefore = ctx.revision;
-            // F08: create() stages a candidate — the active binding/lease is untouched by design.
-            await managed.create(name);
-            const candidateId = managed.candidate?.sessionId ?? null;
-            const document = ctx.scenes.document();
-            const outcome = await managed.saveSnapshot(document, name);
-            if (outcome.status !== 'saved') {
-                // The active binding was never touched; release only the candidate session.
-                if (candidateId) await managed.closeSessionById(candidateId).catch(() => { });
-                if (outcome.status === 'outcome-unknown') ctx.toast('保存结果不确定；候选项目可能已创建，请在项目库中用“查询状态”确认，不要盲目重复创建', true);
-                else ctx.toast(`首存失败：${outcome.message}；候选项目已释放，当前编辑与原受管状态均保留`, true);
-                return;
-            }
-            if (managed.epoch !== epochBefore || ctx.revision !== revisionBefore) {
-                // Stale captured edit state — release the candidate; the snapshot stays in the
-                // library but the switch is not committed.
-                if (candidateId) await managed.closeSessionById(candidateId).catch(() => { });
+            // F01: the whole create lifecycle (candidate → first snapshot → activation → race
+            // re-checks → compensation → scoped cleanup) runs through the shared protocol. It
+            // never replaces the document, resets history or touches the old binding before the
+            // commit; the previous managed session is released only after the full success.
+            const result = await createManagedFromCurrent(managed, name, {
+                revision: () => ctx.revision,
+                document: () => ctx.scenes.document(),
+                markClean: () => { ctx.dirty = false; },
+                notify: (message, error) => ctx.toast(message, error),
+            });
+            if (result.status === 'committed') {
+                $('#save-status').textContent = `受管项目：${managed.projectName}`;
+                ctx.toast(`已创建受管项目「${name}」并保存首个快照（第 ${result.revision} 版）`);
+                ctx.closeModal();
+            } else if (result.status === 'save-unknown') {
+                ctx.toast('保存结果不确定；候选项目可能已创建，请在项目库中用“查询状态”确认，不要盲目重复创建', true);
+            } else if (result.status === 'save-failed') {
+                ctx.toast(`首存失败：${result.message}；候选项目已释放，当前编辑与原受管状态均保留`, true);
+            } else if (result.status === 'stale-saved') {
                 ctx.toast('快照已保存，但期间又有新的修改；候选项目保留在库中（内容不含最新修改）', true);
-                return;
+            } else if (result.status === 'unconfirmed') {
+                const detail = result.error instanceof Error ? result.error.message : String(result.error);
+                ctx.toast(`创建受管项目失败：${detail}；受管状态未确认，保存已锁定，请在项目库中重新打开项目`, true);
+            } else {
+                ctx.toast(result.error instanceof Error ? result.error.message : String(result.error), true);
             }
-            const previous = managed.capture();
-            await managed.activate(); // F08 commit point: the persisted choice moves to the candidate
-            try {
-                // F08: re-verify the captured edit state AFTER the activation receipt.
-                if (managed.epoch !== epochBefore || ctx.revision !== revisionBefore) {
-                    throw Error('激活后工程状态已变化，无法安全提交切换');
-                }
-            } catch (commitError) {
-                // Restore the persisted choice to the previous state; a failed compensation marks
-                // the controller explicitly unconfirmed and snapshot writes stay blocked (F08).
-                await managed.compensateTo(previous);
-                if (candidateId && candidateId !== managed.sessionId) await managed.closeSessionById(candidateId).catch(() => { });
-                throw commitError;
-            }
-            if (previous && previous.sessionId !== managed.sessionId) {
-                await managed.closeSessionById(previous.sessionId).catch(error => {
-                    ctx.toast(`原会话释放失败（租约将在超时后自动回收）：${(error as Error).message}`, true);
-                });
-            }
-            ctx.dirty = false;
-            $('#save-status').textContent = `受管项目：${managed.projectName}`;
-            ctx.toast(`已创建受管项目「${name}」并保存首个快照（第 ${outcome.revision} 版）`);
-            ctx.closeModal();
         } catch (error) {
             ctx.toast((error as Error).message, true);
         } finally {
@@ -212,86 +192,57 @@ export function mountProjectLibrary(ctx: AppContext) {
         }
     }
 
-    async function openProject(projectId: string, name: string) {
-        if (!guard('打开项目')) return;
-        // F10: unified dirty confirmation for every whole-document switch. Cancelling here has NO
-        // candidate/identity/lease side effects because nothing has been staged yet.
-        if (ctx.dirty && !await ctx.confirmDiscardEdits('打开其他项目')) {
-            ctx.toast('已取消打开；未保存的修改保留');
-            return;
+    /** RP7 unified switch entry: project-library open AND same-project reopen share one protocol
+     * (one confirmation, staged/reused candidate, RP6 whole-document apply, compensation and
+     * ownership-scoped cleanup). The stale pre-open revision is never kept: a committed reopen
+     * adopts the DOWNLOADED SnapshotRef/revision. */
+    async function openProject(projectId: string, name: string, options: { reason?: string } = {}) {
+        if (!managed.available) { ctx.toast('当前环境没有项目库（浏览器会话不可用）', true); return false; }
+        if (ctx.busy || ctx.engine.exporting || ctx.history.pending || ctx.draft) {
+            ctx.toast('请先完成当前编辑、导出或绘制操作，再打开项目');
+            return false;
         }
-        if (ctx.draft || ctx.history.pending || ctx.engine.exporting) {
-            ctx.toast('确认期间编辑器状态已变化，请重试');
-            return;
-        }
+        const reason = options.reason ?? '打开其他项目';
         ctx.busy = true; ctx.playing = false; ctx.updateTimeUI();
-        const epochBefore = managed.epoch, revisionBefore = ctx.revision;
-        let candidateId: string | null = null;
-        let committed = false; // the activation receipt moved the persisted choice
+        let result: ManagedCandidateSwitchResult;
         try {
-            // F09: a valid active session on the SAME project is reused as-is — no close, no new
-            // session, no lease churn. This is also the uncertain-save reopen path.
-            const reusable = managed.reuseActiveSession(projectId);
-            let sessionKey: string;
-            let sessionRevision: number;
-            if (reusable) {
-                sessionKey = reusable.sessionId;
-                sessionRevision = reusable.revision;
-            } else {
-                const session = await managed.open(projectId);
-                candidateId = session.sessionId;
-                if (session.leaseBusy) throw Error(`项目「${name}」正被其他进程写入，暂不能打开`);
-                if (!session.current) throw Error('该项目还没有保存的快照');
-                sessionKey = session.sessionId;
-                sessionRevision = session.revision;
-            }
-            const { document } = await managed.download();
-            await prepareDocumentModels(ctx.engine.externalModels, document);
-            if (ctx.draft || ctx.history.pending || ctx.engine.exporting) throw Error('打开期间编辑器出现未完成的操作，请重试');
-            if (managed.epoch !== epochBefore || ctx.revision !== revisionBefore) throw Error('打开期间工程已变化，请重试');
-            await ctx.drainRecovery();
-            if (reusable) {
-                // Same-project reload: session and persisted choice are already correct.
-                ctx.applyDocument(document, ctx.scenes.context, '打开项目', true, true); // R5: fresh history
-                ctx.dirty = false;
-                $('#save-status').textContent = `受管项目：${managed.projectName}`;
-                ctx.toast(`已重开受管项目「${name}」（第 ${sessionRevision} 版）；撤销历史已重新开始`);
-                ctx.closeModal();
-                return;
-            }
-            const previous = managed.capture();
-            await managed.activate(); // F08 commit point: the persisted choice moves to the candidate
-            committed = true;
-            try {
-                // F08: re-verify the captured edit state AFTER the activation receipt, BEFORE the
-                // document is applied; a stale state compensates back to the previous choice.
-                if (managed.epoch !== epochBefore || ctx.revision !== revisionBefore) {
-                    throw Error('激活后工程状态已变化，无法安全应用');
-                }
-                ctx.applyDocument(document, ctx.scenes.context, '打开项目', true, true); // R5: fresh history
-            } catch (applyError) {
-                await managed.compensateTo(previous);
-                throw applyError;
-            }
-            if (previous && previous.sessionId !== sessionKey) {
-                await managed.closeSessionById(previous.sessionId).catch(error => {
-                    ctx.toast(`原会话释放失败（租约将在超时后自动回收）：${(error as Error).message}`, true);
-                });
-            }
-            ctx.dirty = false;
-            $('#save-status').textContent = `受管项目：${managed.projectName}`;
-            ctx.toast(`已打开受管项目「${name}」（第 ${sessionRevision} 版）；撤销历史已重新开始`);
-            ctx.closeModal();
-        } catch (error) {
-            // Pre-activate failures: release only the staged candidate — the active binding was
-            // never touched, so no restore dance is needed.
-            if (!committed && candidateId) await managed.closeSessionById(candidateId).catch(() => { });
-            ctx.toast((error as Error).message, true);
+            result = await switchManagedCandidate(managed, projectId, name, {
+                revision: () => ctx.revision,
+                dirty: () => ctx.dirty,
+                editorBusy: () => !!ctx.draft || !!ctx.history.pending || ctx.engine.exporting,
+                confirmDiscard: r => ctx.confirmDiscardEdits(r),
+                drain: () => ctx.drainRecovery(),
+                prepare: document => prepareDocumentModels(ctx.engine.externalModels, document),
+                apply: document => ctx.applyDocument(document, ctx.scenes.context, '打开项目', true, true),
+                markClean: () => { ctx.dirty = false; },
+                notify: (message, error) => ctx.toast(message, error),
+            }, { reason });
         } finally {
             ctx.busy = false;
             ctx.engine.externalModels.retain([ctx.project, ...ctx.history.undoStack, ...ctx.history.redoStack]);
             ctx.updateTimeUI();
         }
+        if (result.status === 'committed') {
+            $('#save-status').textContent = `受管项目：${managed.projectName}`;
+            ctx.toast(`已${result.reused ? '重开' : '打开'}受管项目「${name}」（第 ${result.revision} 版）；撤销历史已重新开始`);
+            ctx.closeModal();
+            return true;
+        }
+        if (result.status === 'cancelled-confirm') {
+            ctx.toast(`已取消${reason === '重开当前项目' ? '重开' : '打开'}；未保存的修改保留`);
+            return false;
+        }
+        if (result.status === 'cancelled-changed') {
+            ctx.toast('确认期间编辑器状态已变化，请重试');
+            return false;
+        }
+        if (result.status === 'unconfirmed') {
+            const detail = result.error instanceof Error ? result.error.message : String(result.error);
+            ctx.toast(`打开受管项目失败：${detail}；受管状态未确认，保存已锁定，请在项目库中重新打开项目`, true);
+            return false;
+        }
+        ctx.toast(result.error instanceof Error ? result.error.message : String(result.error), true);
+        return false;
     }
 
     async function saveSnapshot() {
@@ -330,8 +281,12 @@ export function mountProjectLibrary(ctx: AppContext) {
 
     async function leaveManaged() {
         if (!guard('离开受管会话')) return;
+        // RP7-R02: a blocked editor cannot leave into a plain save. Check before the drain and
+        // again after it, before the leave request is sent.
+        if (ctx.writeBlockedReason) { ctx.toast(ctx.writeBlockedReason, true); return; }
         try {
             await ctx.drainRecovery();
+            if (ctx.writeBlockedReason) { ctx.toast(ctx.writeBlockedReason, true); return; }
             await managed.leave();
             $('#save-status').textContent = '普通会话（未管理）';
             ctx.toast('已离开受管会话；当前编辑保留，保存恢复为 .director 文件方式');

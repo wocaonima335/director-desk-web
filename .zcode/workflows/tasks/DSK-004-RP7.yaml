@@ -1,0 +1,174 @@
+task_id: DSK-004-RP7
+title: "统一受管候选切换、补偿与重开版本采纳"
+status: PASS # 仅 RP7。R01/R02 及空绑定补偿窗口已闭合。不表示 DSK-004 完成，不授权 RP8。
+source_root: "E:/director-desk/director-desk-web"
+base_commit: "12dda8608058376799b05c65b04e65da53f64eaa"
+initial_worktree: "checkpoint/dsk-003-progress；RP1–RP6 未提交修改与未跟踪文件全部保留，不得 reset/clean 或整文件回退到 HEAD"
+contract_version: "dsk.v1；不修改公共 IPC、存储 schema、工程/备份格式"
+approval:
+  approved: true
+  reference: "已批准计划第34、43–44行。两轮返工后 reviewer agent_aa8d2e74 仍 REWORK。planner agent_765d0d15 对 R01/R02 重规划 PLAN_READY。范围未超出原 RP7：持久选择可补偿、身份变化不得绕过禁写。无新公共契约、无 desktop 改动。主会话确认后实施。"
+goal: "受管打开、重开、从当前工程创建和启动恢复共用候选生命周期：所有权与清理可追踪，持久选择与文档应用可补偿，同项目重开成功后同时采用下载得到的 SnapshotRef/revision，unconfirmed 在 controller 层禁写，确认前后校验身份与版本且不重复确认。"
+context_files:
+  - "src/editor/managed-project.ts"
+  - "src/ui/project-library.ts"
+  - "src/ui/project-save.ts"
+  - "src/main.ts"
+  - "src/app-context.ts"
+  - "src/scenes/document-apply.ts"
+  - "src/scenes/scene-workspace.ts"
+  - "desktop/storage/service.cjs"
+  - "tests/managed-project.test.ts"
+  - "tests/document-apply.test.ts"
+  - "tests/project-save.test.ts"
+  - "tests/dsk-storage.test.cjs"
+allowed_changes:
+  - "src/editor/managed-project.ts"
+  - "src/ui/project-library.ts"
+  - "src/main.ts"
+  - "src/app-context.ts"
+  - "src/ui/project-save.ts"
+  - "tests/managed-project.test.ts"
+  - "tests/document-apply.test.ts"
+  - "tests/project-save.test.ts"
+  - "tests/dsk-storage.test.cjs"
+  - ".zcode/workflows/tasks/DSK-004-RP7.yaml"
+non_goals:
+  - "不实现 RP8，不跑完整 npm test / build / desktop:prepare 作为本任务门禁"
+  - "不修改 desktop storage、shared/storage/canonical.ts、公共契约、依赖、锁文件、代理配置、RP4 runner"
+  - "不把 ParentBounds 写入产品代码"
+  - "不重做普通新建、.director 导入和普通 IndexedDB 恢复的语义"
+  - "不 commit、push、发布"
+acceptance:
+  - id: RP7-A1
+    criterion: "切换在确认前捕获 identity、binding、epoch、revision/context；确认后及关键 await 后复核。确认期间状态变化不得继续执行旧意图。"
+    evidence_required: "可控制时序的竞态测试"
+  - id: RP7-A2
+    criterion: "同一用户动作只确认一次；拒绝确认不创建候选、不改变持久选择或旧 binding。"
+    evidence_required: "确认次数与 wire 调用断言"
+  - id: RP7-A3
+    criterion: "open/create/activate/save 的迟到回执只作用于自己的操作和目标，不覆盖其他候选或 active binding。"
+    evidence_required: "延迟回执具名测试"
+  - id: RP7-A4
+    criterion: "下载、解析、准备或激活前验证失败时，旧文档、历史、dirty、binding、租约和持久选择不变，只清理本次候选。"
+    evidence_required: "失败路径状态对照"
+  - id: RP7-A5
+    criterion: "activate 成功后应用失败时文档经 RP6 回滚并补偿持久选择；补偿失败进入明确 unconfirmed，不伪称已恢复。"
+    evidence_required: "prepare/swap/补偿失败测试"
+  - id: RP7-A6
+    criterion: "同项目重开不关闭复用会话、不新建租约；应用失败保持旧版本；应用成功同时采用下载 SnapshotRef 与 revision。"
+    evidence_required: "成功/失败对照及 close/open 次数"
+  - id: RP7-A7
+    criterion: "revision1 已提交为 revision2 但回执不确定，重开采用 revision2，再次保存得到 revision3；取消重开保留旧 dirty 与版本。"
+    evidence_required: "controller 连接真实 service/library 的隔离测试，禁止只用 mock 返回 revision3"
+  - id: RP7-A8
+    criterion: "直接调用 controller.saveSnapshot 在 unconfirmed 时拒绝，无 upload，版本不变；只有完整成功的重开/切换才能解除这种未确认状态。"
+    evidence_required: "绕过 UI 的直接调用测试"
+  - id: RP7-A9
+    criterion: "RP6 write-blocked 时，受管切换、创建和保存不能靠身份变化绕过；补偿成功不能解除编辑器硬禁写。"
+    evidence_required: "WriteGate 组合测试与源码路径"
+  - id: RP7-A10
+    criterion: "受管启动恢复走统一候选与 RP6；失败不读 legacy recovery，不把已有受管启动选择改成 unmanaged，不泄漏本次候选。"
+    evidence_required: "启动协调测试与 main 接线核对"
+  - id: RP7-A11
+    criterion: "只清理本次拥有的候选与传输；旧会话仅在完整成功后释放；清理失败不把已提交切换报成未提交，不关闭复用会话，不删除已保存项目。"
+    evidence_required: "清理失败与重复结束测试"
+  - id: RP7-A12
+    criterion: "RP1–RP6 预算与保护不变，既有断言不弱化。"
+    evidence_required: "定向回归与 tsc"
+  - id: RP7-R01
+    criterion: "服务端 activate 已 setLastSession 后，候选被关闭或替换时不得走未提交失败。必须补偿回原持久选择，或进入明确 unconfirmed；迟到回执不得覆盖更新的候选、binding 或禁写。无原 binding 且目标已关闭时不得猜 sessionId，也不得伪称已恢复为 unmanaged。"
+    evidence_required: "真实 service/library 上、提交已落盘后的延迟回执测试，并用独立 bootstrap 探针核对持久选择"
+  - id: RP7-R02
+    criterion: "WriteGate blocked 时，保存分流前统一拒绝：不上传、不调用 files('save-project')、不清 dirty。离开受管身份不能绕过。普通保存成功语义和显式导出副本保持不变。"
+    evidence_required: "真实 saveProjectFile 与项目库 leave 入口组合测试"
+verification:
+  - command: "node --experimental-strip-types --test --test-name-pattern RP7 tests/managed-project.test.ts tests/document-apply.test.ts tests/project-save.test.ts tests/dsk-storage.test.cjs"
+    cwd: "E:/director-desk/director-desk-web"
+    expected_result: "exit 0"
+  - command: "node --experimental-strip-types --test tests/managed-project.test.ts tests/document-apply.test.ts tests/project-save.test.ts"
+    cwd: "E:/director-desk/director-desk-web"
+    expected_result: "exit 0"
+  - command: "node node_modules/typescript/bin/tsc --noEmit"
+    cwd: "E:/director-desk/director-desk-web"
+    expected_result: "exit 0"
+  - command: "node --experimental-strip-types --test tests/dsk-storage.test.cjs tests/dsk-rp2-dispose.test.cjs"
+    cwd: "E:/director-desk/director-desk-web"
+    expected_result: "exit 0"
+side_effects_approved: []
+dependencies:
+  - "已落地的 RP1 请求代、RP2 drain、RP3 host permit、RP4 有界读、RP5 canonical 预算、RP6 applyWholeDocument"
+rollback: "只按实施前工作树快照撤回 RP7 在允许文件中的增量；禁止 git reset --hard、git clean，以及把允许文件整份恢复到 HEAD。"
+implementation:
+  agent: director-coder
+  changed_files:
+    - "src/editor/managed-project.ts"
+    - "src/ui/project-library.ts"
+    - "src/main.ts"
+    - "src/ui/project-save.ts"
+    - "tests/managed-project.test.ts"
+    - "tests/document-apply.test.ts"
+    - "tests/project-save.test.ts"
+    - "tests/dsk-storage.test.cjs"
+    - ".zcode/workflows/tasks/DSK-004-RP7.yaml"
+  checks:
+    - command: "node --experimental-strip-types --test --test-name-pattern RP7 tests/managed-project.test.ts tests/document-apply.test.ts tests/project-save.test.ts tests/dsk-storage.test.cjs"
+      exit_code: 0
+      result: "R01/R02 后：42/42。含真实 service 的 switch/create 补偿闭环。"
+    - command: "node --experimental-strip-types --test tests/managed-project.test.ts tests/document-apply.test.ts tests/project-save.test.ts"
+      exit_code: 0
+      result: "70/70。renderer 三文件全过。"
+    - command: "node node_modules/typescript/bin/tsc --noEmit"
+      exit_code: 0
+      result: "无类型错误"
+    - command: "node --experimental-strip-types --test tests/dsk-storage.test.cjs tests/dsk-rp2-dispose.test.cjs"
+      exit_code: 0
+      result: "111/111。含新增两条真实 service R01。一次 MaxListenersExceededWarning，未失败。"
+  blockers: []
+  notes:
+    - "反例先行：tmp/rp7-evidence/red-run 记录未修实现上 15/17 个 RP7 具名反例失败（EXIT=1）；pre-snapshot/ 保存允许文件实施前副本与 SHA256，供审查区分 RP1–RP6 既有增量。"
+    - "controller 层：saveSnapshot 入口拒绝 unconfirmed（不触 wire、不改 revision/current）；upload commit 回执只作用于入口捕获的自身目标（candidate 身份比对/sessionId 比对），activate 回执在 candidate 被移走时抛 switch-superseded 且不晋升；open/create/leave 在已有候选时拒绝（单一候选所有权）；新增 adoptDownloadedSnapshot（A6：重开成功同时采纳下载 SnapshotRef+revision 并解除 unconfirmed）与 switchManagedCandidate 统一协议。"
+    - "switchManagedCandidate：确认前捕获 identity/binding/epoch/revision，确认后、download/prepare 后、drain 后逐一复核；拒绝确认零 wire/零候选/零 binding 变化；提交前失败只关本次候选；提交后应用失败走 compensateTo（startup 分支例外：保持 managed 选择，绝不转 unmanaged，A10）；补偿失败返回 unconfirmed；旧会话只在完整成功后释放，释放失败仅提示不改变已提交事实（A11）。"
+    - "project-library：open 与同项目重开共用协议，重开不再二次确认（A2）；createFromCurrent 走 createManagedFromCurrent 统一生命周期，无文档替换、无历史 reset；startupRestore 受管分支改走统一协议 + RP6 applyDocument，不再直接 history.reset/engine.rebuild。"
+    - "REWORK（审查 agent_f62d0c20，F01–F06）逐条修复记录：F01=src/editor/managed-project.ts createManagedFromCurrent 激活后复核改为『本次目标 binding 已成为当前绑定』（不再要求等于 previous），编辑器 epoch/revision 竞态仍补偿；补偿成功后按 id 显式关闭本次候选会话（compensateTo(null) 已 leave 的除外）。测试：'RP7 F01 red: creating from a plain session…'、'RP7 F01 red: creating from managed A…'、'RP7 F01 red: an editor race during the create activation…'。"
+    - "F02=启动分支 apply 失败后显式 close 本次 candidateId（不再裸 resetSession 遗忘服务端会话），close 失败保留 binding、置 unconfirmed 并 toast『候选会话关闭失败』可追踪报告，不 leave、不读 legacy。测试：'RP7 F02 red: a startup apply failure closes only this candidate session…'（新增 bootstrap 持久选择仍是原 managed 项目断言）、'RP7 F02 red: a failed startup candidate close stays traceable…'。"
+    - "F03=activate 回执后、apply 前复核 editorBusy/epoch/revision（不复用 binding-vs-previous 检查）；失败走『持久选择已提交』补偿并只清理本次候选。测试：'RP7 F03 red: a revision moved during the activation await…'、'RP7 F03 red: an epoch moved during the activation await…'（可控 activate Promise 门）。"
+    - "F04=open/create 发请求前同步置 opening 单飞预留；assertNoCandidate 同时检查 candidate 与 opening；已落地但未解决的候选仍持有控制器（回执不得被后到 create 覆盖）；候选被其他路径清掉按失去所有权中止（不 apply、不重复 close）。测试：'RP7 F04 red: a second open is refused…'、'RP7 F04 red: a create is refused while an open receipt is pending…'、'RP7 F04 red: a candidate cleared during preparation aborts…'。"
+    - "F05=activate 不再提前解除 unconfirmed；只有 adoptDownloadedSnapshot（完整成功应用后）解除可恢复未确认；saveSnapshot 入口拒绝 unconfirmed；创建入口（project-library）与保存入口（project-save）遵守 RP6 WriteGate。测试：'RP7 F05 red: a pre-existing unconfirmed state survives activation and successful compensation until a full reopen'、'RP7 F05 red: a write-blocked retry fails cleanly and the create/save entries stay refused'（断言按 create 阶段限定 closes，未弱化）。"
+    - "F06=A7 真实 service/library 用例改走 switchManagedCandidate 统一协调器 + 可观察文档/dirty ports：拒绝确认零 wire（无 snapshot.read 下载）、保留 dirty/旧版本/会话；确认轮经 ports.apply 应用下载的 revision2 全文档并采纳 revision2，再保存 revision3；回执丢失仍在真实 commit 落盘后的调用边界注入（dropNextCommitReceipt）。全程 project.create=1、project.open=0、project.close=0、activate=1。测试：'RP7 A7: through the unified switch coordinator…'、'RP7 A7: cancelling the reopen keeps the old confirmed revision, dirty flag and reused session untouched…'（取消轮另含 download 后 prepare 失败中止的零 mutating 证据）。"
+    - "REWORK 轮命令真实退出码：检查1（--test-name-pattern RP7 四文件）exit 0，29/29；检查2（三文件全量）exit 0，59/59；检查3（tsc --noEmit）exit 0；检查4（dsk-storage + dsk-rp2-dispose）exit 0，109/109。cwd 仓库根，未设置 DSK_RP*_SERVICE_ENTRY。"
+    - "未改动：src/app-context.ts、src/ui/project-save.ts（本轮复审无需再改，RP6 WriteGate 检查已在位）、desktop storage、shared/storage/canonical.ts、RP4 runner、公共 IPC、依赖。无 ParentBounds 写入产品代码。未 commit/push。"
+replan:
+  planner: director-planner
+  agent_id: agent_765d0d15-a3db-4de7-af1c-27b3a2983121
+  reason: "两轮返工后 reviewer agent_aa8d2e74 仍 REWORK。本轮只修 R01/R02。"
+  allowed_this_round:
+    - "src/editor/managed-project.ts"
+    - "src/ui/project-library.ts"
+    - "src/ui/project-save.ts"
+    - "tests/managed-project.test.ts"
+    - "tests/project-save.test.ts"
+    - "tests/dsk-storage.test.cjs"
+    - ".zcode/workflows/tasks/DSK-004-RP7.yaml"
+  do_not_touch:
+    - "src/main.ts"
+    - "src/app-context.ts"
+    - "tests/document-apply.test.ts"
+    - "desktop/storage"
+    - "shared/storage/canonical.ts"
+review:
+  agent: director-reviewer
+  verdict: PASS
+  scope: "仅 RP7。agent_6521031c 确认空绑定补偿窗口闭合。不表示 DSK-004 完成，不授权 RP8。"
+  findings:
+    - id: agent_aa8d2e74-R01
+      status: IMPLEMENTED
+      summary: "成功 activate 回执携带 serverCommitted 与本次 sessionId。协调器在本地晋升失败时进入已提交补偿；无原 binding 且目标已关闭则 unconfirmed，不猜 sessionId。真实 service 门控在 setLastSession 之后，独立 bootstrap 探针核对。"
+    - id: agent_aa8d2e74-R02
+      status: IMPLEMENTED
+      summary: "saveProjectFile 在分流前拒绝 WriteGate。leaveManaged 在 drain 前后各查一次。回执落地前变 blocked 不清 dirty。导出副本行为未改。"
+  prior_round:
+    reviewer: agent_f62d0c20
+    note: "F01–F06 曾由 coder 声称修复并通过第二轮中的对应项；不得回退这些修复。R01 是 F04 提交事实的剩余缺口，R02 是 F05 普通保存入口的剩余缺口。"
+  unverified: []
+  rework_rounds: 2

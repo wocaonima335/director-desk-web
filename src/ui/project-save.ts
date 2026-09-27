@@ -16,6 +16,13 @@ function ensureIdle(ctx: AppContext): boolean {
 async function saveManagedSnapshot(ctx: AppContext): Promise<boolean> {
     const managed = ctx.managed!;
     if (!ensureIdle(ctx)) return false;
+    // RP7-A9/F05: the RP6 write gate blocks the save entry too — the hard editor ban cannot be
+    // bypassed by identity changes or activation side effects, and never reaches the wire.
+    if (ctx.writeBlockedReason) {
+        documentStatus('编辑器禁写，保存被拒绝');
+        ctx.toast(ctx.writeBlockedReason, true);
+        return false;
+    }
     if (managed.unconfirmed) {
         documentStatus('受管状态未确认，保存被拒绝');
         ctx.toast('受管状态未确认（此前切换失败且补偿未完成）；请在项目库中重新打开项目后再保存', true);
@@ -28,6 +35,13 @@ async function saveManagedSnapshot(ctx: AppContext): Promise<boolean> {
     try {
         const outcome = await managed.saveSnapshot(document);
         if (outcome.status === 'saved') {
+            // RP7-R02: the snapshot may already be durable; a gate raised during the upload still
+            // keeps the editor dirty.
+            if (ctx.writeBlockedReason) {
+                documentStatus('编辑器禁写，保存状态未更新');
+                ctx.toast(ctx.writeBlockedReason, true);
+                return false;
+            }
             const unchanged = managed.epoch === epochAtSave && ctx.revision === revisionAtSave;
             if (unchanged) {
                 ctx.dirty = false;
@@ -52,8 +66,15 @@ async function saveManagedSnapshot(ctx: AppContext): Promise<boolean> {
     }
 }
 
-/** Legacy `.director` export. In managed sessions it is only a copy and never clears save-dirty. */
+/** Legacy `.director` export. In managed sessions it is only a copy and never clears save-dirty.
+ * RP7-R02: the hard write gate is checked before the managed/plain split, so leaving a managed
+ * session cannot turn a blocked editor into a plain file save. */
 export async function saveProjectFile(ctx: AppContext): Promise<boolean> {
+    if (ctx.writeBlockedReason) {
+        documentStatus('编辑器禁写，保存被拒绝');
+        ctx.toast(ctx.writeBlockedReason, true);
+        return false;
+    }
     const managed = ctx.managed;
     if (managed?.available && managed.managedActive) return saveManagedSnapshot(ctx);
     if (!ensureIdle(ctx)) return false;
@@ -69,6 +90,13 @@ export async function saveProjectFile(ctx: AppContext): Promise<boolean> {
         } else {
             download(new Blob([content], { type: 'application/json' }), name);
             ctx.toast('已发起工程下载；浏览器无法确认保存结果，请确认文件后继续。');
+            return false;
+        }
+        // RP7-R02: a gate raised while the write was in flight cannot unwrite the file, but the
+        // receipt must not report the editor clean.
+        if (ctx.writeBlockedReason) {
+            documentStatus('编辑器禁写，保存状态未更新');
+            ctx.toast(ctx.writeBlockedReason, true);
             return false;
         }
         ctx.dirty = false;

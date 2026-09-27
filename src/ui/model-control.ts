@@ -41,6 +41,9 @@ export function mountModelControl(ctx: AppContext) {
     }
     function start() {
         if (take || ctx.busy || ctx.history.pending || ctx.draft || ctx.engine.exporting) return;
+        // RP6: a write-blocked editor must not open a recording transaction.
+        const denied = ctx.writeBlockedReason;
+        if (denied) { ctx.toast(denied, true); return; }
         const e = ctx.current();
         if (e?.id !== targetId) { panel.hidden = true; ctx.toast('选中对象已变化，请重新打开操控录制'); return; }
         try {

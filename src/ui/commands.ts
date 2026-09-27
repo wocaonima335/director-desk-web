@@ -154,6 +154,8 @@ export function createCommands(ctx: AppContext, inspectorTools: { handle(action:
                 $('#project-file').click();
                 break;
             case 'undo': {
+                const denied = ctx.writeBlockedReason;
+                if (denied) { ctx.toast(denied, true); break; }
                 if (ctx.draft) {
                     ctx.cancelPath();
                     break;
@@ -172,6 +174,8 @@ export function createCommands(ctx: AppContext, inspectorTools: { handle(action:
                 break;
             }
             case 'redo': {
+                const denied = ctx.writeBlockedReason;
+                if (denied) { ctx.toast(denied, true); break; }
                 const label = ctx.scenes.redoLabel;
                 ctx.playing = false;
                 const p = ctx.history.redo(ctx.project);

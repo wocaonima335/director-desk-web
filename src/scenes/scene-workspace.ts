@@ -55,4 +55,22 @@ export class SceneWorkspace implements EditorHistory {
         if (this.pending) throw Error('请先完成当前编辑');
         this.#session = new SceneSession(readSceneDocument(input)); this.restoredView = this.#session.view(); return this.project();
     }
+    /** RP6: opaque pre-apply snapshot for the whole-document rollback. Covers the session itself
+     * (reset swaps sessions) plus its document, views and both history directions. */
+    captureDocumentState(): SceneWorkspaceState {
+        return { session: this.#session, state: this.#session.captureState(), restoredView: this.restoredView };
+    }
+    /** Restore exactly the captured workspace; only the whole-document rollback may call this. */
+    restoreDocumentState(saved: SceneWorkspaceState) {
+        saved.session.restoreState(saved.state);
+        this.#session = saved.session;
+        this.restoredView = saved.restoredView ?? this.#session.view();
+    }
+}
+
+/** RP6: capture/restore pair for a failed whole-document apply. */
+export interface SceneWorkspaceState {
+    session: SceneSession;
+    state: ReturnType<SceneSession['captureState']>;
+    restoredView: SceneView | undefined;
 }

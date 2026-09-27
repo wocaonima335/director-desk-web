@@ -75,20 +75,20 @@ function launch(profile, storageOverride) {
     child.stderrTail = () => stderr.slice(-400);
     return child;
 }
-const killTree = child => {
-    if (child.killed || !child.pid) return;
-    spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-};
-process.on('exit', () => { for (const child of children) killTree(child); });
+	const killOwned = child => {
+	    if (!child || child.exitCode !== null || child.signalCode !== null || child.killed) return;
+	    child.kill();
+	};
+	process.on('exit', () => { for (const child of children) killOwned(child); });
 
 async function terminate(child) {
     child.removeAllListeners('exit');
     // Already-exited children never emit 'exit' again; return instead of awaiting forever
     // (an unref'd fallback timer cannot keep the event loop alive to resolve).
     if (child.exitCode !== null || child.signalCode !== null) return;
-    if (!child.killed && child.pid) child.kill();
-    await new Promise(resolve => {
-        const timer = setTimeout(() => { killTree(child); resolve(); }, 5000);
+	    killOwned(child);
+	    await new Promise(resolve => {
+	        const timer = setTimeout(() => { killOwned(child); resolve(); }, 5000);
         child.once('exit', () => { clearTimeout(timer); resolve(); });
     });
 }
@@ -160,7 +160,7 @@ true;
 // Hard deadline so a stalled CDP/Electron cannot hang the runner (exit 0 only on success).
 const deadline = setTimeout(() => {
     fail(`global deadline (600s) exceeded`);
-    for (const child of children) killTree(child);
+	        for (const child of children) killOwned(child);
     process.exit(1);
 }, 600000).unref();
 
@@ -528,10 +528,12 @@ try {
         () => document.querySelector('#save-status')?.textContent?.startsWith('受管项目：'),
         undefined, { timeout: 30000 });
     expect((await c.page.title()) === projectATitle, 'reopening project A must restore its document');
-    // openProject finishes while ctx.busy is still held, so its closeModal is refused by the
-    // modal pages guard and the library modal stays open; close it for real before the undo key.
-    await c.page.click('.modal-footer [data-act="close-modal"]');
-    await c.page.waitForSelector('#project-library', { state: 'detached', timeout: 10000 });
+    // RP7 clears busy before the success closeModal, so the library may already be gone. Older
+    // builds kept busy and refused that close; only click when the modal is still present.
+    if (await c.page.locator('#project-library').count()) {
+        await c.page.click('.modal-footer [data-act="close-modal"]');
+        await c.page.waitForSelector('#project-library', { state: 'detached', timeout: 10000 });
+    }
     const titleBeforeUndo = await c.page.title();
     await c.page.keyboard.press('Control+z');
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -555,8 +557,10 @@ try {
     const statusAfterReuse = await c.page.evaluate(projectId => window.__dskCall('project.status', { projectId }), phase1.projectId);
     expect(statusAfterReuse.ok && statusAfterReuse.data.lease.generation === generationBeforeReuse,
         `a same-project reopen must reuse the session (generation ${generationBeforeReuse} → ${statusAfterReuse.data && statusAfterReuse.data.lease.generation})`);
-    await c.page.click('.modal-footer [data-act="close-modal"]');
-    await c.page.waitForSelector('#project-library', { state: 'detached', timeout: 10000 });
+    if (await c.page.locator('#project-library').count()) {
+        await c.page.click('.modal-footer [data-act="close-modal"]');
+        await c.page.waitForSelector('#project-library', { state: 'detached', timeout: 10000 });
+    }
     console.log(`PHASE6.4c-OK: same-project reopen reused the live session (lease generation stayed at ${generationBeforeReuse})`);
 
     // 6.5 R11 pagination + status panel + explicit leave — REAL pointer and keyboard only (F11):
@@ -653,7 +657,7 @@ try {
     }, { json: documentJson, bytes: documentBytes }).catch(error => ({ error: String(error) }));
     if (!(expect(!staleState.error && !!staleState.projectId, `RP1 stale-transfer staging failed: ${JSON.stringify(staleState)}`))) { }
     // Baseline BEFORE the reload: earlier phases may legitimately leave .part files behind when a
-    // process is hard-killed (taskkill /F cannot run any cleanup; the exit drain is RP2 scope).
+    // process is hard-killed (child.kill() cannot run any cleanup; the exit drain is RP2 scope).
     // RP1 asserts the reload cleans exactly the transfer that is open HERE and creates nothing new.
     const uploadsDir = path.join(storageDir, 'uploads');
     const partsBeforeReload = fsSync.existsSync(uploadsDir) ? await fs.readdir(uploadsDir) : [];

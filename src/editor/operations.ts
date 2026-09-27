@@ -63,6 +63,8 @@ export function createEditingTools(ctx: AppContext) {
         const e = ctx.current();
         if (!e || e.locked)
             return;
+        const denied = ctx.writeBlockedReason;
+        if (denied) { ctx.toast(denied, true); return; }
         if (e.handBinding) { ctx.toast('手持道具请先解除绑定，再绘制独立路径'); return; }
         if (e.structureLink || ctx.project.entities.some(child => child.structureLink?.parentId === e.id)) { ctx.toast('请先解除该模块的上下游连接，再绘制独立路径'); return; }
         ctx.playing = false;
@@ -80,6 +82,8 @@ export function createEditingTools(ctx: AppContext) {
     function addGroundPoint(position: Vec3) {
         if (!ctx.draft)
             return;
+        // RP6: a write-blocked editor never adds path points; an impossible draft is cancelled.
+        if (ctx.writeBlockedReason) { ctx.cancelPath(); return; }
         const e = ctx.project.entities.find(e => e.id === ctx.draft!.id)!;
         if (e.kind === 'camera')
             position[1] += e.path!.points[0].position[1];
@@ -91,6 +95,9 @@ export function createEditingTools(ctx: AppContext) {
     function finishPath() {
         if (!ctx.draft)
             return;
+        // RP6: a write-blocked editor may only cancel the pending path transaction, never commit.
+        const denied = ctx.writeBlockedReason;
+        if (denied) { ctx.cancelPath(); ctx.toast(denied, true); return; }
         const e = ctx.project.entities.find(e => e.id === ctx.draft!.id)!;
         if (e.path!.points.length < 2) {
             cancelPath();

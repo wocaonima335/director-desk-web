@@ -1,7 +1,7 @@
 ---
 name: director-reviewer
 description: 使用 GPT 独立审查 DirectorDesk 实际变更与验收证据，返回 PASS、REWORK 或 REPLAN，不修改业务代码。
-model: "6551fef7-9ece-4c0c-9adf-c79b00e991d9/gpt-6-astra"
+model: "bc04ac19-fada-40be-a01f-54a270bba93f/gpt-6-astra"
 tools: [Read, Bash]
 injectAgentsMd: true
 maxTurns: 60

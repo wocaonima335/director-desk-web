@@ -31,6 +31,7 @@ release/
 /desktop/icon.icns
 # The generated offline helper is a required, directly usable skill runtime.
 /scripts/*
+!/scripts/test-dsk-rp5-memory.mjs
 !/scripts/build-offline-skill.mjs
 !/scripts/build-builtin-skill.mjs
 !/scripts/offline-project-entry.ts

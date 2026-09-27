@@ -49,6 +49,8 @@ export function bindTimelineInput(ctx: AppContext) {
             return {left:Math.max(0,rect.left)+label,right:Math.min(window.innerWidth,rect.left+timeline.clientWidth)-12};
         };
         let appliedDelta:number|undefined;
+        // RP6: a write-blocked editor never opens a clip drag (seeking stays view-only).
+        if(selection&&ctx.writeBlockedReason){ctx.toast(ctx.writeBlockedReason,true);return;}
         if(selection){ctx.history.begin(ctx.project);refreshTimelineSelection(ctx);} else if(!choosingRange){if(!target.closest('.ruler'))selectClip(null);refreshTimelineSelection(ctx);seekAt(x);}
         document.documentElement.dataset.timelineDrag=selection?(resize?'resize':'move'):'seek';
         timeline.setPointerCapture(ev.pointerId);
@@ -90,6 +92,7 @@ export function bindTimelineInput(ctx: AppContext) {
             if(!selection){if(choosingRange){if(cancel){setSelectedEntities(previousEntities);setSelectedClips(previousClips,true);setSelectedTimeRange(previousRange);}else if(selectedTimeRange() && selectedTimeRange()!.end-selectedTimeRange()!.start<1/before.fps)setSelectedTimeRange(null);refreshTimelineSelection(ctx);}return;}
             try {
                 if(cancel)throw Error('已取消拖动');
+                if(ctx.writeBlockedReason)throw Error('已取消拖动'); // RP6: blocked editors only roll back.
                 assertProject(ctx.project);ctx.history.commit(ctx.project);
                 if(moved)ctx.changed(false);
                 else if(group.length===1) {

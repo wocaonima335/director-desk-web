@@ -7,6 +7,8 @@ export interface SceneTransaction extends SceneContext { readonly project: Proje
 export interface SceneHistoryLabel { label: string; sceneId: string; sceneName: string }
 interface Snapshot { document: SceneDocument; views: Record<string, SceneView> }
 interface HistoryEntry extends Snapshot { action: SceneHistoryLabel; revealSceneId?: string }
+/** RP6: opaque whole-session state for the whole-document rollback. */
+interface SceneSessionState { document: SceneDocument; views: Record<string, SceneView>; undo: HistoryEntry[]; redo: HistoryEntry[]; revision: number }
 
 /** One production document, one chronological history. No renderer, DOM or persistence side effects. */
 export class SceneSession {
@@ -105,6 +107,17 @@ export class SceneSession {
         this.#idle(); this.#check(context); const owned = readSceneDocument(next);
         this.#publish(owned, this.#snapshot(), this.#label(label, context.sceneId));
         if (resetViews) this.#views = {};
+    }
+    /** RP6: full-fidelity state capture for the whole-document rollback. Published documents and
+     * history entries are immutable, so entries are shared, not cloned; views are cloned defensively. */
+    captureState(): SceneSessionState {
+        return { document: this.#document, views: clone(this.#views), undo: [...this.#undo], redo: [...this.#redo], revision: this.#revision };
+    }
+    /** Hard restore of the captured state; only the whole-document rollback may call this, and the
+     * restored revision stays exact so pre-apply contexts remain valid against the restored state. */
+    restoreState(state: SceneSessionState) {
+        this.#document = state.document; this.#views = clone(state.views);
+        this.#undo = [...state.undo]; this.#redo = [...state.redo]; this.#revision = state.revision;
     }
     editDocument(context: SceneContext, label: string, operation: (document: SceneDocument) => SceneDocument) {
         this.#idle(); this.#check(context);

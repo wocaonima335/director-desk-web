@@ -39,6 +39,12 @@ const contractsPromise = buildBundle(null, [
 const servicePromise = buildBundle('desktop/storage/service.cjs');
 const libraryPromise = buildBundle('desktop/storage/library.cjs');
 const objectsPromise = buildBundle('desktop/storage/objects.cjs');
+// RP7: the renderer controller under test, bundled through the SAME pipeline so the closed loop
+// drives the real desktop storage service/library with the real wire flow (open/download/save).
+// F06: the unified switch coordinator is bundled too, so the A7 evidence runs the SAME protocol
+// as every managed switch instead of a hand-rolled download→adopt shortcut.
+const controllerBundlePromise = buildBundle(null,
+    "export { ManagedProjectController, switchManagedCandidate, createManagedFromCurrent } from './src/editor/managed-project.ts';");
 
 // RP1 V01: real-fsp barriers for the R01/R02 races. The bundle intercepts node:fs/promises and
 // wraps ONLY rm/mkdir: the wrapped calls still execute the REAL fs operation, but the first call
@@ -3629,6 +3635,138 @@ test('RP4 A3 red: the post-open fstat precedes the first content read; a file tr
     }
 });
 
+test('RP4 A3 sub-scenario: after a REAL partial read the source is mutated in place or truncated mid-stream — the read refuses and never accepts partial or mixed bytes', async () => {
+    const { createObjectStore } = await rp4GatedObjectsPromise;
+    const root = freshRoot('rp4-a3-sub');
+    const store = createObjectStore({ root });
+    const bytes = Buffer.alloc(4000, 21);
+    const { digest } = await store.putObject('proj-rp4a3s', bytes);
+    const objectPath = path.join(root, 'projects', 'proj-rp4a3s', 'objects', `${digest}.json`);
+    // Same-length in-place change: the first 512 bytes are rewritten, the tail stays original.
+    const mutateFirstChunk = () => fs.writeFileSync(objectPath,
+        Buffer.concat([Buffer.alloc(512, 0x5a), bytes.subarray(512)]));
+    try {
+        // (a) read 1 really returns 512 bytes; read 2 is then parked and the UNREAD tail is
+        // rewritten before it runs. The digest check refuses the mixed content.
+        {
+            let releaseOne;
+            let releaseTwo;
+            const gateOne = new Promise(resolve => { releaseOne = resolve; });
+            const gateTwo = new Promise(resolve => { releaseTwo = resolve; });
+            rp4Arm({ openProxyMatch: candidate => candidate === objectPath, readChunkCap: 512, readGateQueue: [gateOne, gateTwo] });
+            try {
+                const gates = rp4Gates();
+                const readsBefore = gates.handleReads;
+                const gotBefore = gates.handleReadGot.length;
+                const pending = store.getObject('proj-rp4a3s', digest, 4000);
+                assert.ok(await rp4WaitUntil(() => gates.handleReads - readsBefore >= 1, 2000, 'parked first read'),
+                    'the first short read must be reachable');
+                releaseOne();
+                assert.ok(await rp4WaitUntil(() => gates.handleReadGot.slice(gotBefore).reduce((sum, got) => sum + got, 0) >= 512, 2000, 'first real bytes'),
+                    '512 bytes must really return before mutation');
+                assert.ok(await rp4WaitUntil(() => gates.handleReads - readsBefore >= 2, 2000, 'parked second read'),
+                    'the second read must park after the first completed');
+                fs.writeFileSync(objectPath, Buffer.concat([bytes.subarray(0, 512), Buffer.alloc(3488, 0x5a)]));
+                releaseTwo();
+                const failure = await pending.then(() => null, error => error);
+                assert.ok(failure, 'a source changed after a real partial read must not be delivered');
+                assert.equal(failure.reason, 'corrupt-object', `unexpected failure: ${failure && failure.message}`);
+                assert.match(failure.message, /摘要/, 'the refusal must be the content-digest verification');
+                const consumed = gates.handleReadGot.slice(gotBefore).reduce((sum, got) => sum + got, 0);
+                assert.equal(consumed, 4000,
+                    'the core must really consume ALL 4000 bytes of the mixed file — an early refusal would fake this coverage');
+                const sessions = rp4ReadSessions(store);
+                if (sessions) {
+                    const trace = sessions[sessions.length - 1];
+                    assert.equal(trace.label, '登记的对象文件');
+                    assert.equal(trace.totalRead, 4000, 'the bounded core reads every byte; the digest check is what refuses');
+                    assert.equal(trace.delivered, 4000);
+                    assert.deepEqual(trace.close, { ok: true });
+                }
+                fs.writeFileSync(objectPath, bytes); // restore for the next sub-cases
+            } finally {
+                releaseOne?.();
+                releaseTwo?.();
+                rp4Disarm();
+            }
+        }
+        // (b) copyObject must refuse the same mixed read and never stage target bytes.
+        {
+            let releaseOne;
+            let releaseTwo;
+            const gateOne = new Promise(resolve => { releaseOne = resolve; });
+            const gateTwo = new Promise(resolve => { releaseTwo = resolve; });
+            rp4Arm({ openProxyMatch: candidate => candidate === objectPath, readChunkCap: 512, readGateQueue: [gateOne, gateTwo] });
+            try {
+                const gates = rp4Gates();
+                const readsBefore = gates.handleReads;
+                const gotBefore = gates.handleReadGot.length;
+                const pending = store.copyObject('proj-rp4a3s', 'proj-rp4a3s-copy', digest, 4000);
+                assert.ok(await rp4WaitUntil(() => gates.handleReads - readsBefore >= 1, 2000, 'parked copy read'),
+                    'the copy read must be reachable');
+                releaseOne();
+                assert.ok(await rp4WaitUntil(() => gates.handleReadGot.slice(gotBefore).reduce((sum, got) => sum + got, 0) >= 512, 2000, 'copy first real bytes'),
+                    'the copy must really return 512 bytes before mutation');
+                assert.ok(await rp4WaitUntil(() => gates.handleReads - readsBefore >= 2, 2000, 'parked second copy read'),
+                    'the second copy read must park after the first completed');
+                fs.writeFileSync(objectPath, Buffer.concat([bytes.subarray(0, 512), Buffer.alloc(3488, 0x5a)]));
+                releaseTwo();
+                const failure = await pending.then(() => null, error => error);
+                assert.ok(failure && failure.reason === 'corrupt-object', 'a mixed read must refuse the copy');
+                assert.match(failure.message, /摘要/);
+                assert.equal(fs.existsSync(path.join(root, 'projects', 'proj-rp4a3s-copy')), false,
+                    'the refused copy must not stage any target bytes');
+                fs.writeFileSync(objectPath, bytes); // restore
+            } finally {
+                releaseOne?.();
+                releaseTwo?.();
+                rp4Disarm();
+            }
+        }
+        // (c) truncation AFTER TWO completed real partial reads: read1 delivers 512 bytes, read2
+        // is parked, the file is cut to 3000 — the core stops at EOF with exactly 3000 bytes and
+        // the read is refused as incomplete instead of trusting the partial content.
+        {
+            let releaseOne;
+            let releaseTwo;
+            const gateOne = new Promise(resolve => { releaseOne = resolve; });
+            const gateTwo = new Promise(resolve => { releaseTwo = resolve; });
+            rp4Arm({ openProxyMatch: candidate => candidate === objectPath, readChunkCap: 512, readGateQueue: [gateOne, gateTwo] });
+            try {
+                const gates = rp4Gates();
+                const readsBefore = gates.handleReads;
+                const pending = store.getObject('proj-rp4a3s', digest, 4000);
+                assert.ok(await rp4WaitUntil(() => gates.handleReads - readsBefore >= 1, 2000, 'first parked read'),
+                    'the first short read must be reachable');
+                releaseOne();
+                assert.ok(await rp4WaitUntil(() => gates.handleReads - readsBefore >= 2, 2000, 'second parked read'),
+                    'the second real partial read must be reachable after the first completed');
+                fs.writeFileSync(objectPath, bytes.subarray(0, 3000)); // truncate mid-stream
+                releaseTwo();
+                const failure = await pending.then(() => null, error => error);
+                assert.ok(failure, 'a file truncated after real partial reads must not be delivered');
+                assert.equal(failure.reason, 'corrupt-object', `unexpected failure: ${failure && failure.message}`);
+                assert.match(failure.message, /读取不完整/, 'the refusal must name the incomplete read');
+                const sessions = rp4ReadSessions(store);
+                if (sessions) {
+                    const trace = sessions[sessions.length - 1];
+                    assert.equal(trace.totalRead, 3000, 'the bytes actually read must be traceable to the truncation point');
+                }
+            } finally {
+                releaseOne?.();
+                releaseTwo?.();
+                rp4Disarm();
+            }
+        }
+        // Control: with the original bytes restored and no injection, the read succeeds again.
+        fs.writeFileSync(objectPath, bytes);
+        const again = await store.getObject('proj-rp4a3s', digest, 4000);
+        assert.ok(again.equals(bytes), 'the store stays usable for the intact source');
+    } finally {
+        rp4Disarm();
+    }
+});
+
 test('RP4 A4: the real snapshot.read reaches the bounded read core; a tampered same-name object is never overwritten; put/get reuse and verify stay intact', async () => {
     const { svc, call, store, root } = await makeRp4Service({ label: 'rp4-a4', gated: false });
     try {
@@ -3923,6 +4061,375 @@ test('RP4 A7 red: an existing import target is verified by a bounded read (never
     }
 });
 
+test('RP4 A7 sub-scenario: streaming export and import verify the ACTUAL bytes — exact byte equality on success; wrong declared length, in-place mutation and mid-stream truncation all refuse with nothing published', async () => {
+    const { createObjectStore } = await rp4GatedObjectsPromise;
+    const root = freshRoot('rp4-a7-sub');
+    const store = createObjectStore({ root });
+    const bytes = Buffer.alloc(200000, 41);
+    const { digest } = await store.putObject('proj-rp4a7s-src', bytes);
+    const sourcePath = path.join(root, 'projects', 'proj-rp4a7s-src', 'objects', `${digest}.json`);
+    const mutateFirstChunk = () => fs.writeFileSync(sourcePath,
+        Buffer.concat([Buffer.alloc(65536, 0x5a), bytes.subarray(65536)]));
+    const tmpLeftovers = projectDir => {
+        const objectsDir = path.join(root, 'projects', projectDir, 'objects');
+        return fs.existsSync(objectsDir)
+            ? fs.readdirSync(objectsDir).filter(name => name.startsWith('.tmp-'))
+            : [];
+    };
+    try {
+        // (a) success: the exported file must equal the object BYTE FOR BYTE, not only by hash.
+        {
+            const dest = path.join(root, 'export-a7s-ok.bin');
+            const exported = await store.streamObjectToFile('proj-rp4a7s-src', digest, 200000, dest);
+            assert.deepEqual(exported, { digest, length: 200000 });
+            const written = fs.readFileSync(dest);
+            assert.equal(written.length, 200000);
+            assert.ok(written.equals(bytes), 'the exported bytes must equal the object byte for byte');
+            assert.equal(store.sha256Hex(written), digest);
+        }
+        // (b) wrong declared length: refused at lstat before ANY open and content read.
+        {
+            rp4Arm({ openProxyMatch: candidate => candidate === sourcePath });
+            try {
+                const gates = rp4Gates();
+                const opensBefore = gates.openCalls;
+                const readsBefore = gates.handleReads;
+                const dest = path.join(root, 'export-a7s-length.bin');
+                const failure = await store.streamObjectToFile('proj-rp4a7s-src', digest, 199999, dest).then(() => null, error => error);
+                assert.ok(failure && failure.reason === 'corrupt-object', 'a wrong declared length must refuse the export');
+                assert.match(failure.message, /大小与登记值不符/, JSON.stringify(failure && failure.message));
+                assert.equal(gates.openCalls - opensBefore, 0, 'the length refusal must cost zero opens');
+                assert.equal(gates.handleReads - readsBefore, 0, 'the length refusal must cost zero content reads');
+                assert.equal(fs.existsSync(dest), false);
+            } finally {
+                rp4Disarm();
+            }
+        }
+        // (b2) the file shrinks between lstat and the post-open fstat: refused with zero reads.
+        {
+            let releaseStat;
+            const statGate = new Promise(resolve => { releaseStat = resolve; });
+            rp4Arm({ openProxyMatch: candidate => candidate === sourcePath, statGate });
+            try {
+                const gates = rp4Gates();
+                const statsBefore = gates.handleStats;
+                const readsBefore = gates.handleReads;
+                const dest = path.join(root, 'export-a7s-shrink.bin');
+                const pending = store.streamObjectToFile('proj-rp4a7s-src', digest, 200000, dest);
+                assert.ok(await rp4WaitUntil(() => gates.handleStats - statsBefore >= 1, 2000, 'parked export fstat'),
+                    'the post-open fstat must be reachable');
+                fs.writeFileSync(sourcePath, bytes.subarray(0, 199999)); // shrink mid-flight
+                releaseStat();
+                const failure = await pending.then(() => null, error => error);
+                assert.ok(failure && failure.reason === 'corrupt-object', 'a handle shrunk past its declaration must refuse');
+                assert.match(failure.message, /大小与登记值不符/, JSON.stringify(failure && failure.message));
+                assert.equal(gates.handleReads - readsBefore, 0, 'the fstat refusal must cost zero content reads');
+                assert.equal(fs.existsSync(dest), false);
+                fs.writeFileSync(sourcePath, bytes); // restore
+            } finally {
+                releaseStat?.();
+                rp4Disarm();
+            }
+        }
+        // (c) in-place mutation after a real partial read: the export consumes a mixed stream,
+        // the streaming digest check refuses it, and the destination is removed.
+        {
+            let releaseRead;
+            const readGate = new Promise(resolve => { releaseRead = resolve; });
+            rp4Arm({ openProxyMatch: candidate => candidate === sourcePath, readChunkCap: 65536, readGateQueue: [readGate] });
+            try {
+                const gates = rp4Gates();
+                const readsBefore = gates.handleReads;
+                const gotBefore = gates.handleReadGot.length;
+                const dest = path.join(root, 'export-a7s-mutated.bin');
+                const pending = store.streamObjectToFile('proj-rp4a7s-src', digest, 200000, dest);
+                assert.ok(await rp4WaitUntil(() => gates.handleReads - readsBefore >= 1, 2000, 'parked export read'),
+                    'the first export read must be reachable');
+                mutateFirstChunk();
+                releaseRead();
+                const failure = await pending.then(() => null, error => error);
+                assert.ok(failure && failure.reason === 'corrupt-object', 'a mutated source must fail the streaming digest check');
+                assert.match(failure.message, /流式校验失败/, JSON.stringify(failure && failure.message));
+                const consumed = gates.handleReadGot.slice(gotBefore).reduce((sum, got) => sum + got, 0);
+                assert.equal(consumed, 200000, 'the mixed stream must really be consumed; the digest check is what refuses');
+                assert.equal(fs.existsSync(dest), false, 'the failed export must remove its destination');
+                const sessions = rp4ReadSessions(store);
+                if (sessions) {
+                    const trace = sessions[sessions.length - 1];
+                    assert.equal(trace.label, '备份对象流式导出');
+                    assert.equal(trace.totalRead, 200000);
+                    assert.ok(trace.error, 'the session must record the digest refusal');
+                    assert.deepEqual(trace.close, { ok: true });
+                }
+                fs.writeFileSync(sourcePath, bytes); // restore
+            } finally {
+                releaseRead?.();
+                rp4Disarm();
+            }
+        }
+        // (d) truncation mid-stream: EOF shortens the stream, the length check refuses, no file.
+        {
+            let releaseRead;
+            const readGate = new Promise(resolve => { releaseRead = resolve; });
+            rp4Arm({ openProxyMatch: candidate => candidate === sourcePath, readChunkCap: 65536, readGateQueue: [readGate] });
+            try {
+                const gates = rp4Gates();
+                const readsBefore = gates.handleReads;
+                const dest = path.join(root, 'export-a7s-truncated.bin');
+                const pending = store.streamObjectToFile('proj-rp4a7s-src', digest, 200000, dest);
+                assert.ok(await rp4WaitUntil(() => gates.handleReads - readsBefore >= 1, 2000, 'parked export read'),
+                    'the first export read must be reachable');
+                fs.writeFileSync(sourcePath, bytes.subarray(0, 65536)); // truncate mid-stream
+                releaseRead();
+                const failure = await pending.then(() => null, error => error);
+                assert.ok(failure && failure.reason === 'corrupt-object', 'a truncated stream must fail the length check');
+                assert.match(failure.message, /流式校验失败/, JSON.stringify(failure && failure.message));
+                assert.equal(fs.existsSync(dest), false, 'no partial export may survive');
+                const sessions = rp4ReadSessions(store);
+                if (sessions) {
+                    const trace = sessions[sessions.length - 1];
+                    assert.equal(trace.totalRead, 65536, 'the stream must stop at the truncation point');
+                }
+                fs.writeFileSync(sourcePath, bytes); // restore for the import legs
+            } finally {
+                releaseRead?.();
+                rp4Disarm();
+            }
+        }
+        // (e) success: the imported object must equal the source byte for byte.
+        {
+            const imported = await store.streamFileToObject(sourcePath, 'proj-rp4a7s-i', digest, 200000);
+            assert.deepEqual(imported, { digest, length: 200000 });
+            const published = fs.readFileSync(path.join(root, 'projects', 'proj-rp4a7s-i', 'objects', `${digest}.json`));
+            assert.ok(published.equals(bytes), 'the imported bytes must equal the source byte for byte');
+            assert.equal(published.length, 200000);
+        }
+        // (f) wrong declared length on import: refused at the post-open fstat with zero reads.
+        {
+            rp4Arm({ openProxyMatch: candidate => candidate === sourcePath });
+            try {
+                const gates = rp4Gates();
+                const readsBefore = gates.handleReads;
+                const failure = await store.streamFileToObject(sourcePath, 'proj-rp4a7s-l', digest, 199999).then(() => null, error => error);
+                assert.ok(failure && failure.reason === 'corrupt-object', 'a wrong declared length must refuse the import');
+                assert.match(failure.message, /大小与登记值不符/, JSON.stringify(failure && failure.message));
+                assert.equal(gates.handleReads - readsBefore, 0, 'the length refusal must cost zero content reads');
+                assert.equal(fs.existsSync(path.join(root, 'projects', 'proj-rp4a7s-l', 'objects', `${digest}.json`)), false,
+                    'the refused import must publish nothing');
+            } finally {
+                rp4Disarm();
+            }
+        }
+        // (g) in-place mutation: the import consumes a mixed stream, the digest check refuses,
+        // nothing is published and no tmp survives.
+        {
+            let releaseRead;
+            const readGate = new Promise(resolve => { releaseRead = resolve; });
+            rp4Arm({ openProxyMatch: candidate => candidate === sourcePath, readChunkCap: 65536, readGateQueue: [readGate] });
+            try {
+                const gates = rp4Gates();
+                const readsBefore = gates.handleReads;
+                const pending = store.streamFileToObject(sourcePath, 'proj-rp4a7s-m', digest, 200000);
+                assert.ok(await rp4WaitUntil(() => gates.handleReads - readsBefore >= 1, 2000, 'parked import read'),
+                    'the first import read must be reachable');
+                mutateFirstChunk();
+                releaseRead();
+                const failure = await pending.then(() => null, error => error);
+                assert.ok(failure && failure.reason === 'corrupt-object', 'a mutated source must fail the import digest check');
+                assert.match(failure.message, /流式校验失败/, JSON.stringify(failure && failure.message));
+                assert.equal(fs.existsSync(path.join(root, 'projects', 'proj-rp4a7s-m', 'objects', `${digest}.json`)), false,
+                    'the mutated import must publish nothing');
+                assert.deepEqual(tmpLeftovers('proj-rp4a7s-m'), [], 'no tmp file may survive the refused import');
+                fs.writeFileSync(sourcePath, bytes); // restore
+            } finally {
+                releaseRead?.();
+                rp4Disarm();
+            }
+        }
+        // (h) truncation mid-stream: the length check refuses, nothing is published.
+        {
+            let releaseRead;
+            const readGate = new Promise(resolve => { releaseRead = resolve; });
+            rp4Arm({ openProxyMatch: candidate => candidate === sourcePath, readChunkCap: 65536, readGateQueue: [readGate] });
+            try {
+                const gates = rp4Gates();
+                const readsBefore = gates.handleReads;
+                const pending = store.streamFileToObject(sourcePath, 'proj-rp4a7s-t', digest, 200000);
+                assert.ok(await rp4WaitUntil(() => gates.handleReads - readsBefore >= 1, 2000, 'parked import read'),
+                    'the first import read must be reachable');
+                fs.writeFileSync(sourcePath, bytes.subarray(0, 65536));
+                releaseRead();
+                const failure = await pending.then(() => null, error => error);
+                assert.ok(failure && failure.reason === 'corrupt-object', 'a truncated source must fail the import length check');
+                assert.match(failure.message, /流式校验失败/, JSON.stringify(failure && failure.message));
+                assert.equal(fs.existsSync(path.join(root, 'projects', 'proj-rp4a7s-t', 'objects', `${digest}.json`)), false,
+                    'the truncated import must publish nothing');
+                assert.deepEqual(tmpLeftovers('proj-rp4a7s-t'), []);
+                const sessions = rp4ReadSessions(store);
+                if (sessions) {
+                    const trace = sessions[sessions.length - 1];
+                    assert.equal(trace.label, '备份对象流式导入');
+                    assert.equal(trace.totalRead, 65536);
+                }
+                fs.writeFileSync(sourcePath, bytes); // restore
+            } finally {
+                releaseRead?.();
+                rp4Disarm();
+            }
+        }
+        // Control: after every refused import the store still imports a clean source.
+        const control = await store.streamFileToObject(sourcePath, 'proj-rp4a7s-ok', digest, 200000);
+        assert.deepEqual(control, { digest, length: 200000 }, 'the store stays usable after the refused imports');
+    } finally {
+        rp4Disarm();
+    }
+});
+
+test('RP4 F2 red: a streaming import publishes only after the source handle close succeeds — a genuine source close failure removes the tmp, never publishes and never swallows, and hands the operable handle to the independent caller', async () => {
+    const { createObjectStore } = await rp4GatedObjectsPromise;
+    const root = freshRoot('rp4-f2-import-source-close');
+    const store = createObjectStore({ root }); // no ledger bound: independent caller owns failures
+    const bytes = Buffer.alloc(3000, 23);
+    const { digest } = await store.putObject('proj-f2-src', bytes);
+    const sourcePath = path.join(root, 'projects', 'proj-f2-src', 'objects', `${digest}.json`);
+    const finalPath = path.join(root, 'projects', 'proj-f2-dst', 'objects', `${digest}.json`);
+    try {
+        rp4Arm({ openProxyMatch: candidate => candidate === sourcePath, closeFailRemaining: 1 });
+        const failure = await store.streamFileToObject(sourcePath, 'proj-f2-dst', digest, 3000).then(() => null, error => error);
+        assert.ok(failure, 'the source close failure must fail the import');
+        assert.equal(failure.reason, 'io-failure', JSON.stringify(failure && failure.message));
+        // Engagement proof: the failure really is the injected handle.close failure.
+        assert.equal(failure.closeError?.code, 'EIO', JSON.stringify(failure && failure.message));
+        assert.equal(fs.existsSync(finalPath), false,
+            'PRE-FIX BEHAVIORAL RED: the object was renamed under its final name before the source close settled');
+        const objectsDir = path.join(root, 'projects', 'proj-f2-dst', 'objects');
+        const leftovers = fs.existsSync(objectsDir) ? fs.readdirSync(objectsDir).filter(name => name.startsWith('.tmp-')) : [];
+        assert.deepEqual(leftovers, [], 'the tmp file must be cleaned up when the source close fails');
+        const sessions = rp4ReadSessions(store);
+        if (sessions) {
+            const trace = sessions[sessions.length - 1];
+            assert.equal(trace.label, '备份对象流式导入');
+            assert.equal(trace.close.ok, false, 'the session telemetry must record the close failure');
+        }
+        assert.ok(failure.closeError.handle, 'the failed source handle must reach the independent caller');
+        rp4Disarm();
+        await failure.closeError.handle.close(); // operable: the retry really releases the still-open fd
+        const retried = await store.streamFileToObject(sourcePath, 'proj-f2-dst', digest, 3000);
+        assert.deepEqual(retried, { digest, length: 3000 }, 'the store stays usable: a retry without the fault publishes');
+        assert.equal(fs.existsSync(finalPath), true, 'the clean retry publishes the object');
+    } finally {
+        rp4Disarm();
+    }
+});
+
+test('RP4 F1 red: an independent caller without a cleanup ledger receives the operable handle when a read close fails', async () => {
+    const { createObjectStore } = await rp4GatedObjectsPromise;
+    const root = freshRoot('rp4-f1-read-close-handle');
+    const store = createObjectStore({ root });
+    const bytes = Buffer.alloc(128, 5);
+    const { digest } = await store.putObject('proj-f1-handle', bytes);
+    const objectPath = path.join(root, 'projects', 'proj-f1-handle', 'objects', `${digest}.json`);
+    try {
+        rp4Arm({ openProxyMatch: candidate => candidate === objectPath, closeFailRemaining: 1 });
+        const failure = await store.getObject('proj-f1-handle', digest, 128).then(() => null, error => error);
+        assert.ok(failure, 'the genuine close failure must fail the read');
+        assert.equal(failure.code, 'EIO', JSON.stringify(failure && failure.message));
+        assert.ok(failure.handle, 'PRE-FIX BEHAVIORAL RED: the independent caller received no handle to take over');
+        assert.ok(fs.readFileSync(objectPath).equals(bytes), 'the object content itself stays intact');
+        rp4Disarm();
+        await failure.handle.close(); // operable: the retry really closes the still-open fd
+    } finally {
+        rp4Disarm();
+    }
+});
+
+test('RP4 F1 red: two streaming-import close failures are BOTH preserved — the second is chained on the first and both failed handles reach the independent caller', async () => {
+    const { createObjectStore } = await rp4GatedObjectsPromise;
+    const root = freshRoot('rp4-f1-import-two-close-fails');
+    const store = createObjectStore({ root });
+    const bytes = Buffer.alloc(3000, 29);
+    const { digest } = await store.putObject('proj-f1b-src', bytes);
+    const sourcePath = path.join(root, 'projects', 'proj-f1b-src', 'objects', `${digest}.json`);
+    const finalPath = path.join(root, 'projects', 'proj-f1b-dst', 'objects', `${digest}.json`);
+    try {
+        // Both opens are proxied and the policy fails exactly two closes: the tmp sink close
+        // (settled first, inside the try) and the source close (late, in the finally).
+        rp4Arm({ openProxyMatch: () => true, closeFailRemaining: 2 });
+        const failure = await store.streamFileToObject(sourcePath, 'proj-f1b-dst', digest, 3000).then(() => null, error => error);
+        assert.ok(failure, 'close failures must fail the import');
+        assert.equal(failure.reason, 'io-failure', JSON.stringify(failure && failure.message));
+        const first = failure.closeError;
+        assert.ok(first && first.code === 'EIO', `the first close failure must be preserved: ${JSON.stringify(failure && failure.message)}`);
+        const second = Array.isArray(first.nextCloseErrors) ? first.nextCloseErrors[0] : null;
+        assert.ok(second && second.code === 'EIO',
+            'PRE-FIX BEHAVIORAL RED: the second close error was dropped (overwritten) instead of chained');
+        assert.notEqual(first, second, 'the two close failures must be distinct errors');
+        assert.equal(fs.existsSync(finalPath), false, 'nothing may be published when a close fails');
+        assert.ok(first.handle && second.handle, 'both failed handles must reach the independent caller');
+        rp4Disarm();
+        await first.handle.close();
+        await second.handle.close();
+    } finally {
+        rp4Disarm();
+    }
+});
+
+test('RP4 F1 red: a streaming export preserves BOTH close failures, removes its target and never publishes when a close fails', async () => {
+    const { createObjectStore } = await rp4GatedObjectsPromise;
+    const root = freshRoot('rp4-f1-export-close');
+    const store = createObjectStore({ root });
+    const bytes = Buffer.alloc(200000, 31);
+    const { digest } = await store.putObject('proj-f1c', bytes);
+    const dest = path.join(root, 'export-f1.bin');
+    try {
+        // The policy fails exactly two closes: the source close, then the destination close.
+        rp4Arm({ openProxyMatch: () => true, closeFailRemaining: 2 });
+        const failure = await store.streamObjectToFile('proj-f1c', digest, 200000, dest).then(() => null, error => error);
+        assert.ok(failure, 'the close failure must fail the export');
+        assert.equal(failure.code, 'EIO', JSON.stringify(failure && failure.message));
+        assert.equal(fs.existsSync(dest), false, 'an export whose handle close failed must never be published');
+        const second = Array.isArray(failure.nextCloseErrors) ? failure.nextCloseErrors[0] : null;
+        assert.ok(second && second.code === 'EIO',
+            'PRE-FIX BEHAVIORAL RED: the destination close error was dropped instead of chained');
+        assert.notEqual(failure, second, 'the two close failures must be distinct errors');
+        assert.ok(failure.handle && second.handle, 'both failed handles must reach the independent caller');
+        rp4Disarm();
+        await failure.handle.close();
+        await second.handle.close();
+    } finally {
+        rp4Disarm();
+    }
+});
+
+test('RP4 F1 red: a primary export I/O failure keeps every close failure and operable handle on the thrown error', async () => {
+    const { createObjectStore } = await rp4GatedObjectsPromise;
+    const root = freshRoot('rp4-f1-export-io-close');
+    const store = createObjectStore({ root });
+    const bytes = Buffer.alloc(200000, 33);
+    const { digest } = await store.putObject('proj-f1d', bytes);
+    const dest = path.join(root, 'export-f1-io.bin');
+    try {
+        rp4Arm({ openProxyMatch: () => true, writeRejectRemaining: 1, closeFailRemaining: 2 });
+        const failure = await store.streamObjectToFile('proj-f1d', digest, 200000, dest).then(() => null, error => error);
+        assert.ok(failure, 'the primary I/O failure must reject the export');
+        assert.equal(failure.reason, 'io-failure');
+        assert.match(failure.message, /流式复制失败/);
+        assert.equal(failure.cause.code, 'EIO');
+        assert.equal(fs.existsSync(dest), false, 'a failed export must not leave its destination');
+        const first = failure.closeError;
+        const second = Array.isArray(first && first.nextCloseErrors) ? first.nextCloseErrors[0] : null;
+        assert.equal(first && first.code, 'EIO');
+        assert.equal(second && second.code, 'EIO');
+        assert.notEqual(first, second);
+        assert.ok(first.handle && second.handle, 'both handles must be reachable from the thrown error');
+        rp4Disarm();
+        await first.handle.close();
+        await second.handle.close();
+    } finally {
+        rp4Disarm();
+    }
+});
+
 test('RP4 A8 red: restore verification runs through the bounded read core per object (manifest label, per-object labels, streaming import), and a refusal registers nothing', async () => {
     let dialogTarget = null;
     const { svc, call, store } = await makeRp4Service({
@@ -3963,6 +4470,74 @@ test('RP4 A8 red: restore verification runs through the bounded read core per ob
         const list = await call('storage.v1.project.list', {});
         assert.equal(list.data.projects.filter(project => project.projectId !== seeded.projectId).length, 1,
             'exactly the first restore registered; the refused one registered nothing');
+    } finally {
+        rp4Disarm();
+        await svc.dispose({ timeoutMs: 5000 });
+    }
+});
+
+test('RP4 A8 sub-scenario: a restore copy whose post-copy re-verification fails registers nothing and removes the staged copy', async () => {
+    let dialogTarget = null;
+    const { svc, call, root, store } = await makeRp4Service({
+        label: 'rp4-a8-reverify',
+        dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [dialogTarget] }) },
+    });
+    try {
+        const seeded = await seedProjectWithSnapshots(call, 2);
+        const backupRoot = freshRoot('rp4-a8-reverify-target');
+        fs.mkdirSync(backupRoot, { recursive: true });
+        dialogTarget = backupRoot;
+        const backup = await call('storage.v1.backup.create', { projectId: seeded.projectId });
+        assert.equal(backup.ok, true, JSON.stringify(backup.error ?? {}));
+        const backupDir = path.join(backupRoot, fs.readdirSync(backupRoot).find(name => name.startsWith('director-desk-backup-')));
+        // Freeze the published backup bytes: the failed restore must leave them untouched.
+        const objectsDir = path.join(backupDir, 'objects');
+        const backupBefore = new Map(fs.readdirSync(objectsDir).map(name =>
+            [name, store.sha256Hex(fs.readFileSync(path.join(objectsDir, name)))]));
+        dialogTarget = backupDir;
+        // Arm ONLY opens inside this store's projects tree: during the restore the ONLY such
+        // content read is the post-copy re-verification of the staged object (the copy leg reads
+        // the backup directory and only WRITES the staged tmp). One rejected read therefore fails
+        // exactly the re-verification — AFTER the streaming copy has already published the file.
+        rp4Arm({
+            openProxyMatch: candidate => typeof candidate === 'string' && candidate.startsWith(path.join(root, 'projects')),
+            readRejectRemaining: 1,
+        });
+        const gates = rp4Gates();
+        const readsBefore = gates.handleReads;
+        const sessionsBefore = rp4ReadSessions(store)?.length ?? 0;
+        const unresolvedBefore = typeof svc._internal.unresolvedCleanupCount === 'function' ? svc._internal.unresolvedCleanupCount() : null;
+        const refused = await call('storage.v1.backup.restore', {});
+        assert.equal(refused.ok, false, 'a failed post-copy re-verification must refuse the restore');
+        assert.equal(refused.error.message, 'storage.v1/io-failure', JSON.stringify(refused.error ?? {}));
+        assert.equal(gates.handleReads - readsBefore, 1,
+            'exactly the re-verification read must engage the injected failure (the copy leg itself must have succeeded)');
+        const sessions = rp4ReadSessions(store);
+        if (sessions) {
+            const recent = sessions.slice(sessionsBefore);
+            const importTraces = recent.filter(item => item.label === '备份对象流式导入');
+            assert.equal(importTraces.length, 1, 'the copy leg must have completed exactly once before the re-verification');
+            assert.deepEqual(importTraces[0].close, { ok: true }, 'the copy leg must have closed cleanly');
+            const last = recent[recent.length - 1];
+            assert.equal(last.label, '登记的对象文件', 'the refusal must come from the post-copy re-verification read');
+            assert.ok(last.error, 'the re-verification session must record the failure');
+            assert.deepEqual(last.close, { ok: true }, 'the failed re-verification still closed its handle cleanly');
+        }
+        if (unresolvedBefore !== null) {
+            assert.equal(svc._internal.unresolvedCleanupCount(), unresolvedBefore,
+                'a clean close must never enter the cleanup ledger');
+        }
+        // Nothing was registered and the staged copy is gone from disk.
+        const list = await call('storage.v1.project.list', {});
+        assert.deepEqual(list.data.projects.map(project => project.projectId), [seeded.projectId],
+            'the failed restore must not register a new project');
+        assert.deepEqual(fs.readdirSync(path.join(root, 'projects')), [seeded.projectId],
+            'the staged new-project directory must be removed after the refusal');
+        // The published backup itself is byte-identical after the failed restore.
+        for (const [name, digestBefore] of backupBefore) {
+            assert.equal(store.sha256Hex(fs.readFileSync(path.join(objectsDir, name))), digestBefore,
+                `the backup object ${name} must stay untouched by the refused restore`);
+        }
     } finally {
         rp4Disarm();
         await svc.dispose({ timeoutMs: 5000 });
@@ -4192,6 +4767,176 @@ test('RP4 A10 red: a read-handle close failure is never swallowed — a transien
     }
 });
 
+test('RP4 A10 sub-scenario: combined read+close failures, a close hang with a concurrent download and combined export failures count each real attempt exactly once and never double-register', async () => {
+    // (a) read failure AND close failure on one session: one read request, one close attempt,
+    // ONE ledger entry — the combined failure is never counted twice, and the ledger retry
+    // performs the one real close that resolves it.
+    {
+        const harness = await makeRp4Service({ label: 'rp4-a10s-combo' });
+        const { svc, call, root, store } = harness;
+        try {
+            const seeded = await seedProjectWithSnapshots(call, 1);
+            const digest = seeded.refs[0].ref.digest;
+            const objectPath = path.join(root, 'projects', seeded.projectId, 'objects', `${digest}.json`);
+            rp4Arm({ openProxyMatch: candidate => candidate === objectPath, readRejectRemaining: 1, closeFailRemaining: 1 });
+            const gates = rp4Gates();
+            const statsBefore = rp4ReadStats(store);
+            const readsBefore = gates.handleReads;
+            const closesBefore = gates.handleCloses;
+            const unresolvedBefore = typeof svc._internal.unresolvedCleanupCount === 'function' ? svc._internal.unresolvedCleanupCount() : null;
+            const read = await call('storage.v1.snapshot.read', { sessionId: seeded.sessionId });
+            assert.equal(read.ok, false, 'the combined read+close failure must fail the download');
+            assert.equal(read.error.message, 'storage.v1/io-failure', JSON.stringify(read.error ?? {}));
+            assert.equal(gates.handleReads - readsBefore, 1, 'exactly ONE read request: the failed read is not retried inline');
+            assert.equal(gates.handleCloses - closesBefore, 1, 'exactly ONE close attempt on the failed handle');
+            const stats = rp4ReadStats(store);
+            if (stats && statsBefore) {
+                assert.equal(stats.closeAttempts - statsBefore.closeAttempts, 1, 'the close attempt is counted exactly once');
+                assert.equal(stats.closeFailures - statsBefore.closeFailures, 1, 'the close failure is counted exactly once');
+            }
+            if (unresolvedBefore !== null) {
+                assert.equal(svc._internal.unresolvedCleanupCount(), unresolvedBefore + 1,
+                    'ONE failed handle = exactly ONE ledger entry, even when the read failed too');
+            }
+            const permits = svc._internal.hostPermitCount ? svc._internal.hostPermitCount() : null;
+            if (permits !== null) assert.equal(permits, 0, 'the failed combined read must release its host permit');
+            rp4Disarm();
+            const drain = await svc.dispose({ timeoutMs: 8000 });
+            assert.equal(drain.ok, true, `the ledger retry must really close and finish: ${JSON.stringify(drain)}`);
+            assert.equal(svc._internal.dbOpen(), false);
+            if (unresolvedBefore !== null) {
+                assert.equal(svc._internal.unresolvedCleanupCount(), unresolvedBefore,
+                    'the retry must RESOLVE the ledger entry, not double-register it');
+            }
+            assert.ok(rp4Gates().handleCloses - closesBefore >= 2, 'the retry must perform one more REAL close');
+        } finally {
+            rp4Disarm();
+        }
+    }
+    // (b) a hanging read close must not stall an unrelated concurrent download: both deliver
+    // their exact own bytes, sessions stay distinct and every close counts once.
+    {
+        const harness = await makeRp4Service({ label: 'rp4-a10s-hang' });
+        const { svc, call, root, store } = harness;
+        const drainDownload = async (read, withCall) => {
+            let payload = Buffer.alloc(0);
+            for (let index = 0; index < 128; index += 1) {
+                const chunk = await withCall('storage.v1.snapshot.download.chunk', { transferId: read.data.transferId });
+                assert.equal(chunk.ok, true, JSON.stringify(chunk.error ?? {}));
+                payload = Buffer.concat([payload, Buffer.from(chunk.data.data, 'base64')]);
+                if (chunk.data.final) break;
+            }
+            return payload;
+        };
+        try {
+            const projectA = await seedProjectWithSnapshots(call, 1);
+            const frameB = { sender: { id: 7399 }, senderFrame: { url: 'director://app/rp4-a10s-b' } };
+            const callB = (action, data) => call(action, data, frameB);
+            const projectB = await seedProjectWithSnapshots(callB, 1);
+            const digestA = projectA.refs[0].ref.digest;
+            const pathA = path.join(root, 'projects', projectA.projectId, 'objects', `${digestA}.json`);
+            rp4Arm({ openProxyMatch: candidate => candidate === pathA, closeHangMs: 400 });
+            const sessionsBefore = rp4ReadSessions(store)?.length ?? 0;
+            const statsBefore = rp4ReadStats(store);
+            const gatesBefore = rp4Gates();
+            const readsBefore = gatesBefore.handleReads;
+            const closesBefore = gatesBefore.handleCloses;
+            const startedAt = Date.now();
+            const pendingA = (async () => {
+                const read = await call('storage.v1.snapshot.read', { sessionId: projectA.sessionId });
+                assert.equal(read.ok, true, JSON.stringify(read.error ?? {}));
+                const payload = await drainDownload(read, call);
+                return { read, payload, settledAt: Date.now() };
+            })();
+            const pendingB = (async () => {
+                const read = await callB('storage.v1.snapshot.read', { sessionId: projectB.sessionId });
+                assert.equal(read.ok, true, JSON.stringify(read.error ?? {}));
+                const payload = await drainDownload(read, callB);
+                return { read, payload, settledAt: Date.now() };
+            })();
+            const [outcomeA, outcomeB] = await Promise.all([pendingA, pendingB]);
+            assert.ok(outcomeB.settledAt - startedAt < 2000);
+            assert.ok(outcomeA.settledAt - outcomeB.settledAt >= 250,
+                `the concurrent download must settle well before the 400ms close hang releases (delta ${outcomeA.settledAt - outcomeB.settledAt}ms)`);
+            assert.equal(outcomeA.payload.length, outcomeA.read.data.length);
+            assert.equal(store.sha256Hex(outcomeA.payload), digestA, 'the hung download must still deliver its exact bytes');
+            assert.equal(outcomeB.payload.length, outcomeB.read.data.length);
+            assert.equal(store.sha256Hex(outcomeB.payload), projectB.refs[0].ref.digest,
+                'the concurrent download must deliver its exact own bytes');
+            const sessions = rp4ReadSessions(store);
+            if (sessions) {
+                const downloads = sessions.slice(sessionsBefore).filter(item => item.label === '登记的对象文件');
+                assert.equal(downloads.length, 2, 'both concurrent downloads must register exactly one bounded session each');
+                assert.equal(new Set(downloads.map(item => item.id)).size, downloads.length,
+                    'concurrent sessions must stay distinct, never merged');
+                for (const trace of downloads) {
+                    assert.deepEqual(trace.close, { ok: true });
+                    assert.equal(trace.delivered, trace.limit, 'each concurrent download delivers exactly its own length');
+                }
+            }
+            const statsAfter = rp4ReadStats(store);
+            const gatesAfter = rp4Gates();
+            if (statsBefore && statsAfter) {
+                const readDelta = statsAfter.readCalls - statsBefore.readCalls;
+                const byteDelta = statsAfter.readBytes - statsBefore.readBytes;
+                assert.equal(statsAfter.closeAttempts - statsBefore.closeAttempts, 2, 'each concurrent download closes exactly once');
+                assert.equal(readDelta, 2 * (gatesAfter.handleReads - readsBefore), 'each wrapper read has one product request and one real short-read continuation');
+                assert.equal(byteDelta, outcomeA.payload.length + outcomeB.payload.length, 'counted bytes must equal both delivered payloads exactly');
+            }
+            assert.equal(gatesAfter.handleCloses - closesBefore, 1, 'the injected download A closes through the wrapper exactly once');
+            const permits = svc._internal.hostPermitCount ? svc._internal.hostPermitCount() : null;
+            if (permits !== null) assert.equal(permits, 0, 'both downloads must release their permits');
+            if (typeof svc._internal.unresolvedCleanupCount === 'function') {
+                assert.equal(svc._internal.unresolvedCleanupCount(), 0, 'a hung-then-successful close never enters the ledger');
+            }
+        } finally {
+            rp4Disarm();
+            await svc.dispose({ timeoutMs: 8000 });
+        }
+    }
+    // (c) a primary export write failure plus TWO close failures: the primary failure adds zero
+    // close attempts, each real close counts exactly once, and both handles stay operable.
+    {
+        const { createObjectStore } = await rp4GatedObjectsPromise;
+        const root = freshRoot('rp4-a10s-io-close');
+        const store = createObjectStore({ root });
+        const bytes = Buffer.alloc(200000, 47);
+        const { digest } = await store.putObject('proj-rp4a10s', bytes);
+        const dest = path.join(root, 'export-a10s.bin');
+        try {
+            rp4Arm({ openProxyMatch: () => true, writeRejectRemaining: 1, closeFailRemaining: 2 });
+            const gates = rp4Gates();
+            const statsBefore = rp4ReadStats(store);
+            const writesBefore = gates.writeCalls;
+            const failure = await store.streamObjectToFile('proj-rp4a10s', digest, 200000, dest).then(() => null, error => error);
+            assert.ok(failure, 'the primary write failure must fail the export');
+            assert.equal(failure.reason, 'io-failure', JSON.stringify(failure && failure.message));
+            assert.equal(fs.existsSync(dest), false, 'the failed export must not leave a destination');
+            const stats = rp4ReadStats(store);
+            if (stats && statsBefore) {
+                assert.equal(stats.closeAttempts - statsBefore.closeAttempts, 2,
+                    'exactly two real close attempts (source, destination) — the primary I/O failure adds none');
+                assert.equal(stats.closeFailures - statsBefore.closeFailures, 2,
+                    'each close failure is counted exactly once, never doubled by the chain');
+                assert.equal(stats.readBytes - statsBefore.readBytes, 65536,
+                    'exactly one 64KiB block is consumed before the write failure');
+            }
+            assert.equal(gates.writeCalls - writesBefore, 1, 'the failed write is counted exactly once (no retry)');
+            const first = failure.closeError;
+            assert.ok(first && first.code === 'EIO', 'the first close failure must ride on the primary error');
+            const second = Array.isArray(first && first.nextCloseErrors) ? first.nextCloseErrors[0] : null;
+            assert.ok(second && second.code === 'EIO', 'the second close failure must be chained');
+            assert.notEqual(first, second);
+            assert.ok(first.handle && second.handle, 'both failed handles must reach the caller');
+            rp4Disarm();
+            await first.handle.close();
+            await second.handle.close();
+        } finally {
+            rp4Disarm();
+        }
+    }
+});
+
 test('RP4 A11: a junctioned project is refused on the read side with the external sentinel untouched; a download parked mid-read loses the race against a reload and never delivers bytes', async () => {
     // (a) junction on the READ path (project.status integrity walk) — plain service entry.
     {
@@ -4250,5 +4995,324 @@ test('RP4 A11: a junctioned project is refused on the read side with the externa
             rp4Disarm();
             await svc.dispose({ timeoutMs: 5000 });
         }
+    }
+});
+
+// --- RP7 renderer closed loop: the ManagedProjectController against the REAL service/library ----
+
+/** Build a real storage service plus a controller wired to it; `dropNextCommit` injects a lost
+ * upload-commit receipt AFTER the real commit landed (the honest uncertain-save scenario). */
+async function makeRp7Controller(label) {
+    const contracts = await contractsPromise;
+    const { ManagedProjectController } = await controllerBundlePromise;
+    const { createStorageService } = await servicePromise;
+    const root = freshRoot(label);
+    const svc = createStorageService({
+        root, dialog: null,
+        verifiers: { document: contracts.assertSceneDocument, canonical: contracts.canonicalJson, manifest: contracts.BackupManifestSchema },
+        now: () => Date.now(),
+    });
+    const frame = { sender: { id: 7 }, senderFrame: { url: 'director://app/' } };
+    const wire = [];
+    let dropNextCommit = false;
+    let holdActivate = null;
+    const call = (action, data) => svc.runInRequestContext(frame, async () => {
+        wire.push(action);
+        if (action === 'storage.v1.upload.commit' && dropNextCommit) {
+            dropNextCommit = false;
+            const reply = await svc.handlers[action](data);
+            if (reply.ok) return { ok: false, error: { code: 'ACTION_FAILED', message: 'storage.v1/outcome-unknown', details: ['RP7 注入：提交已落盘但回执丢失'] } };
+            return reply;
+        }
+        if (action === 'storage.v1.session.activate' && holdActivate) {
+            const reply = await svc.handlers[action](data);
+            const parked = holdActivate;
+            holdActivate = null;
+            parked.resolveReady();
+            await parked.gate;
+            return reply;
+        }
+        return svc.handlers[action](data);
+    });
+    const controller = new ManagedProjectController(call);
+    const counts = {};
+    for (const action of wire) counts[action] = (counts[action] ?? 0) + 1;
+    return {
+        controller, call, svc, wire, contracts,
+        dropNextCommitReceipt() { dropNextCommit = true; },
+        holdNextActivate() {
+            let resolveReady = () => { };
+            let release = () => { };
+            const ready = new Promise(resolve => { resolveReady = resolve; });
+            const gate = new Promise(resolve => { release = resolve; });
+            holdActivate = { resolveReady, gate };
+            return { ready, release };
+        },
+        async probeChoice() {
+            const probe = { sender: { id: 8 }, senderFrame: { url: 'director://app/' } };
+            return svc.runInRequestContext(probe, () => svc.handlers['storage.v1.session.bootstrap']({}));
+        },
+        count(action) { return wire.filter(name => name === action).length; },
+        doc(name) { const document = contracts.readSceneDocument(contracts.demoProject()); document.name = name; return document; },
+    };
+}
+
+test('RP7 A7: through the unified switch coordinator a refused reopen downloads nothing while the confirmed reopen applies revision2 and a follow-up save lands revision3 (real service/library)', async () => {
+    const harness = await makeRp7Controller('rp7-reopen');
+    const { controller, call, svc, wire } = harness;
+    const { switchManagedCandidate } = await controllerBundlePromise;
+    try {
+        await controller.bootstrap();
+        const created = await controller.create('RP7重开');
+        const projectId = created.projectId;
+        await controller.activate();
+        assert.equal(controller.identity, 'managed');
+        assert.equal(controller.revision, 0);
+        const first = await controller.saveSnapshot(harness.doc('版本一'));
+        assert.equal(first.status, 'saved');
+        assert.equal(first.revision, 1);
+        // revision2 really lands on the service, but its receipt is lost at the call boundary
+        // (injected AFTER the real commit handler ran).
+        harness.dropNextCommitReceipt();
+        const uncertain = await controller.saveSnapshot(harness.doc('版本二'));
+        assert.equal(uncertain.status, 'outcome-unknown');
+        assert.equal(controller.revision, 1, 'the uncertain commit keeps the confirmed local revision');
+        const truth = await call('project.status', { projectId });
+        assert.equal(truth.ok, true);
+        assert.equal(truth.data.revision, 2, 'the service really committed revision2');
+
+        // F06: the reopen runs through the SAME unified switch coordinator as every managed
+        // switch, with observable document/dirty ports. Round 1: the user REFUSES.
+        let dirty = true;
+        let cleans = 0;
+        let confirmations = 0;
+        const applied = [];
+        const makePorts = agree => ({
+            revision: () => 0,
+            dirty: () => dirty,
+            editorBusy: () => false,
+            confirmDiscard: () => { confirmations += 1; return Promise.resolve(agree); },
+            drain: async () => { },
+            prepare: async () => { },
+            apply: document => { applied.push({ name: document.name, scenes: document.scenes.length }); },
+            markClean: () => { dirty = false; cleans += 1; },
+            notify: () => { },
+        });
+        const wireBeforeRefusal = wire.length;
+        const readsBeforeRefusal = harness.count('storage.v1.snapshot.read');
+        const refused = await switchManagedCandidate(controller, projectId, 'RP7重开', makePorts(false));
+        assert.equal(refused.status, 'cancelled-confirm', 'the refused confirmation cancels the reopen');
+        assert.equal(confirmations, 1, 'the refusal is asked exactly once');
+        assert.equal(wire.length, wireBeforeRefusal, 'a refused reopen performs zero wire calls');
+        assert.equal(harness.count('storage.v1.snapshot.read'), readsBeforeRefusal, 'a refused reopen downloads nothing');
+        assert.equal(dirty, true, 'a refused reopen keeps the editor dirty');
+        assert.equal(cleans, 0, 'a refused reopen never clears dirty');
+        assert.deepEqual(applied, [], 'a refused reopen applies no document');
+        assert.equal(controller.revision, 1, 'a refused reopen keeps the confirmed revision');
+        assert.equal(controller.current.revision, 1, 'a refused reopen keeps the confirmed SnapshotRef');
+        assert.equal(controller.sessionId, created.sessionId, 'the reused session stays bound');
+        assert.equal(controller.unconfirmed, false, 'a refusal is not a failure state');
+
+        // Round 2: the user confirms — the coordinator downloads revision2, applies the whole
+        // DOWNLOADED document through the port and adopts the downloaded SnapshotRef/revision.
+        const confirmed = await switchManagedCandidate(controller, projectId, 'RP7重开', makePorts(true));
+        assert.equal(confirmed.status, 'committed');
+        assert.equal(confirmed.reused, true, 'the same-session reopen reuses the live session');
+        assert.equal(confirmations, 2, 'the committed round confirms exactly once more');
+        assert.equal(applied.length, 1, 'the downloaded document is applied through the port exactly once');
+        assert.equal(applied[0].name, '版本二', 'the applied document is the DOWNLOADED revision2 content');
+        assert.equal(applied[0].scenes, harness.doc('x').scenes.length, 'the applied document carries the real scenes');
+        assert.equal(dirty, false, 'the committed reopen clears the editor dirty flag');
+        assert.equal(cleans, 1, 'markClean runs exactly once for the committed reopen');
+        assert.equal(controller.revision, 2, 'the reopen adopts the downloaded revision, not the pre-reopen one');
+        assert.equal(controller.current.revision, 2, 'the adopted SnapshotRef is the downloaded revision2');
+        assert.equal(harness.count('storage.v1.snapshot.read'), readsBeforeRefusal + 1, 'exactly one download for the committed round');
+        // The whole loop kept the same session: no close, no reopen, no new lease, no re-activate.
+        assert.equal(harness.count('project.create'), 1, 'exactly one session creation for the whole loop');
+        assert.equal(harness.count('project.open'), 0, 'the reopen must not open a new session');
+        assert.equal(harness.count('storage.v1.project.close'), 0, 'the reopen must not close the reused session');
+        assert.equal(harness.count('storage.v1.session.activate'), 1, 'exactly one persisted-choice activation');
+        assert.equal(harness.count('storage.v1.session.leave'), 0, 'the reused session is never left');
+        // The next save builds on the adopted revision: revision3, same session.
+        const third = await controller.saveSnapshot(harness.doc('版本三'));
+        assert.equal(third.status, 'saved');
+        assert.equal(third.revision, 3, 'the next save builds on the adopted revision2');
+        assert.equal(controller.revision, 3);
+        const statusAfter = await call('project.status', { projectId });
+        assert.equal(statusAfter.data.revision, 3);
+    } finally {
+        svc.dispose();
+    }
+});
+
+test('RP7 A7: cancelling the reopen keeps the old confirmed revision, dirty flag and reused session untouched (real service/library)', async () => {
+    const harness = await makeRp7Controller('rp7-cancel');
+    const { controller, call, svc, wire } = harness;
+    const { switchManagedCandidate } = await controllerBundlePromise;
+    try {
+        await controller.bootstrap();
+        const created = await controller.create('RP7取消');
+        const projectId = created.projectId;
+        await controller.activate();
+        assert.equal((await controller.saveSnapshot(harness.doc('版本一'))).revision, 1);
+        harness.dropNextCommitReceipt();
+        assert.equal((await controller.saveSnapshot(harness.doc('版本二'))).status, 'outcome-unknown');
+        assert.equal(controller.revision, 1);
+        const truth = await call('project.status', { projectId });
+        assert.equal(truth.data.revision, 2, 'revision2 landed on the service without a receipt');
+        const mutating = action => [
+            'project.create', 'project.open', 'storage.v1.project.close',
+            'storage.v1.session.activate', 'storage.v1.session.leave',
+            'storage.v1.upload.begin', 'storage.v1.upload.chunk', 'storage.v1.upload.commit',
+        ].includes(action);
+        let dirty = true;
+        let cleans = 0;
+        let confirmations = 0;
+        const ports = (agree, prepare) => ({
+            revision: () => 0,
+            dirty: () => dirty,
+            editorBusy: () => false,
+            confirmDiscard: () => { confirmations += 1; return Promise.resolve(agree); },
+            drain: async () => { },
+            prepare: prepare ?? (async () => { }),
+            apply: () => { throw Error('取消的往返绝不能走到应用'); },
+            markClean: () => { cleans += 1; },
+            notify: () => { },
+        });
+        // Round 1: the user refuses the confirmation — the coordinator performs ZERO wire
+        // activity: no download, no mutation; dirty, old revision and session stay exact.
+        const wireBeforeRefusal = wire.length;
+        const cancelled = await switchManagedCandidate(controller, projectId, 'RP7取消', ports(false));
+        assert.equal(cancelled.status, 'cancelled-confirm');
+        assert.equal(confirmations, 1);
+        assert.equal(wire.length, wireBeforeRefusal, 'a cancelled reopen performs zero wire calls');
+        assert.equal(dirty, true, 'cancelling keeps the editor dirty');
+        assert.equal(cleans, 0, 'cancelling never clears dirty');
+        assert.equal(controller.revision, 1, 'cancelling keeps the old confirmed revision');
+        assert.equal(controller.current.revision, 1, 'cancelling keeps the old confirmed SnapshotRef');
+        assert.equal(controller.candidate, null);
+        assert.equal(controller.sessionId, created.sessionId, 'the reused session stays bound');
+        assert.equal(controller.unconfirmed, false, 'a cancel is not an unconfirmed state');
+        // Round 2: the confirmation passes and a download runs, but preparation aborts — still
+        // nothing is adopted or mutated; the old version, dirty flag and session survive.
+        const wireBeforeAbort = wire.length;
+        const readsBeforeAbort = harness.count('storage.v1.snapshot.read');
+        const aborted = await switchManagedCandidate(controller, projectId, 'RP7取消', ports(true, async () => { throw Error('准备失败'); }));
+        assert.equal(aborted.status, 'failed');
+        assert.equal(harness.count('storage.v1.snapshot.read'), readsBeforeAbort + 1, 'exactly one download ran before the abort');
+        assert.deepEqual(wire.slice(wireBeforeAbort).filter(mutating), [], 'an aborted reopen performs zero mutating wire calls');
+        assert.equal(dirty, true, 'an aborted reopen keeps the editor dirty');
+        assert.equal(cleans, 0, 'an aborted reopen never clears dirty');
+        assert.equal(controller.revision, 1, 'an aborted reopen keeps the old confirmed revision');
+        assert.equal(controller.current.revision, 1, 'an aborted reopen keeps the old confirmed SnapshotRef');
+        assert.equal(controller.sessionId, created.sessionId, 'the session stays bound and reusable after the abort');
+        assert.equal(controller.unconfirmed, false, 'a pre-commit abort is not an unconfirmed state');
+    } finally {
+        svc.dispose();
+    }
+});
+
+test('RP7 R01: switch reconciles a committed activation after its candidate closes (real service/library)', async () => {
+    const harness = await makeRp7Controller('rp7-r01-switch');
+    const { controller, call, svc } = harness;
+    const { switchManagedCandidate } = await controllerBundlePromise;
+    try {
+        await controller.bootstrap();
+        const created = await controller.create('甲');
+        const projectA = created.projectId;
+        const sessionA = created.sessionId;
+        await controller.activate();
+        assert.equal((await controller.saveSnapshot(harness.doc('甲档'))).status, 'saved');
+        const createdB = await call('project.create', { name: '乙' });
+        assert.equal(createdB.ok, true);
+        const projectB = createdB.data.projectId;
+        const sessionB = createdB.data.sessionId;
+        const bytes = new TextEncoder().encode(harness.contracts.canonicalJson(harness.doc('乙档')));
+        const begin = await call('storage.v1.upload.begin', {
+            sessionId: sessionB, expectedRevision: 0, declaredLength: bytes.length, name: '乙',
+        });
+        assert.equal(begin.ok, true, JSON.stringify(begin.error ?? {}));
+        const chunk = await call('storage.v1.upload.chunk', {
+            transferId: begin.data.transferId, offset: 0, data: Buffer.from(bytes).toString('base64'),
+        });
+        assert.equal(chunk.ok, true, JSON.stringify(chunk.error ?? {}));
+        const committedB = await call('storage.v1.upload.commit', { transferId: begin.data.transferId });
+        assert.equal(committedB.ok, true, JSON.stringify(committedB.error ?? {}));
+        const closedB = await call('storage.v1.project.close', { sessionId: sessionB });
+        assert.equal(closedB.ok, true, JSON.stringify(closedB.error ?? {}));
+        const hold = harness.holdNextActivate();
+        let applied = 0;
+        let cleans = 0;
+        const switching = switchManagedCandidate(controller, projectB, '乙', {
+            revision: () => 0,
+            dirty: () => false,
+            editorBusy: () => false,
+            confirmDiscard: async () => true,
+            drain: async () => { },
+            prepare: async () => { },
+            apply: () => { applied += 1; },
+            markClean: () => { cleans += 1; },
+            notify: () => { },
+        }, { confirm: false });
+        await hold.ready;
+        const committed = await harness.probeChoice();
+        assert.equal(committed.ok, true);
+        assert.equal(committed.data.projectId, projectB, 'the server persisted B before the renderer receipt');
+        const staged = controller.candidate?.sessionId;
+        assert.ok(staged, 'the switch still owns its candidate while the receipt is held');
+        await controller.closeSessionById(staged);
+        hold.release();
+        const result = await switching;
+        assert.notEqual(result.status, 'committed');
+        assert.equal(applied, 0, 'the superseded switch never applies');
+        assert.equal(cleans, 0, 'the superseded switch never clears dirty');
+        const choice = await harness.probeChoice();
+        assert.equal(choice.data.mode, 'managed');
+        assert.equal(choice.data.projectId, projectA, 'the persisted choice is compensated back to A');
+        assert.equal(controller.sessionId, sessionA, 'the local binding stays on A');
+        assert.equal(controller.unconfirmed, false, 'a successful compensation is not an unresolved split');
+        assert.notEqual(controller.candidate?.sessionId, staged, 'the closed candidate is not revived');
+    } finally {
+        svc.dispose();
+    }
+});
+
+test('RP7 R01: create reconciles a committed activation after its candidate closes (real service/library)', async () => {
+    const harness = await makeRp7Controller('rp7-r01-create');
+    const { controller, svc } = harness;
+    const { createManagedFromCurrent } = await controllerBundlePromise;
+    try {
+        await controller.bootstrap();
+        let cleans = 0;
+        const hold = harness.holdNextActivate();
+        const creating = createManagedFromCurrent(controller, '新建', {
+            revision: () => 0,
+            document: () => harness.doc('当前工程'),
+            markClean: () => { cleans += 1; },
+            notify: () => { },
+        });
+        await hold.ready;
+        const committed = await harness.probeChoice();
+        assert.equal(committed.data.mode, 'managed', 'the first snapshot activation persisted before the receipt');
+        const projectB = committed.data.projectId;
+        const staged = controller.candidate?.sessionId;
+        assert.ok(staged);
+        await controller.closeSessionById(staged);
+        hold.release();
+        const result = await creating;
+        assert.equal(result.status, 'unconfirmed', 'the closed target cannot be left safely, so the split stays explicit');
+        assert.equal(cleans, 0, 'the superseded create never clears dirty');
+        assert.equal(controller.unconfirmed, true);
+        const choice = await harness.probeChoice();
+        assert.equal(choice.data.projectId, projectB, 'the server choice stays on the created project');
+        assert.notEqual(choice.data.mode, 'unmanaged', 'a closed target is not pretended back into a plain session');
+        const status = await harness.call('project.status', { projectId: projectB });
+        assert.equal(status.ok, true);
+        assert.equal(status.data.revision, 1, 'the first snapshot stays in the library');
+        const refused = await controller.saveSnapshot(harness.doc('仍拒绝'));
+        assert.equal(refused.status, 'failed');
+        assert.equal(refused.reason, 'unconfirmed');
+    } finally {
+        svc.dispose();
     }
 });

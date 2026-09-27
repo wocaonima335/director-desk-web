@@ -28,6 +28,11 @@ export interface AppContext {
     preview: string;
     dirty: boolean;
     readonly revision: number;
+    /** RP6: unified write gate — null when writes are allowed, otherwise the denial message
+     * shown by every mutating entry after a failed whole-document rollback. */
+    readonly writeBlockedReason: string | null;
+    /** RP6: throw-shaped unified write gate for write paths that report failures by throwing. */
+    refuseWrite(): void;
     busy: boolean;
     draft: {
         id: string;

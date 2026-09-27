@@ -10,8 +10,14 @@ export function bindLiveFields(ctx: AppContext, mutate: (key: string, value: str
     const completed = new WeakSet<EventTarget>();
     const finish = (cancel = false) => {
         if (!input) return;
+        const denied = ctx.writeBlockedReason;
         const edited = input; input = undefined;completed.add(edited);
         try {
+            // RP6-R02: the gate is checked independently of the input, BEFORE commit/changed().
+            // A gate that turned blocked while the edit was live must roll the in-flight edit back
+            // on every completion path (change, focusout, Enter, window blur) — never commit
+            // history or bump the revision.
+            if (denied) throw Error(denied);
             if (cancel || !edited.value || !edited.checkValidity()) throw Error('输入已取消');
             assertLockedEntitiesUnchanged(ctx.history.pending!, ctx.project);
             assertProject(ctx.project);ctx.engine.externalModels.assertReady(ctx.project);
@@ -29,6 +35,8 @@ export function bindLiveFields(ctx: AppContext, mutate: (key: string, value: str
         if (!key || !/^(pos\.|rot\.|scale\.|target\.|offset\.|handOffset\.|handRotation\.|camera\.(focal|targetHeight)$|height$)/.test(key)) return;
         if(key==='height' && ctx.current()?.kind==='crowd')return;
         completed.delete(target);
+        // RP6: a write-blocked editor starts no numeric edit and rolls any in-flight one back.
+        if (ctx.writeBlockedReason) { if (input) finish(true); return; }
         if(ctx.busy || ctx.draft || ctx.current()?.locked || !target.value || !target.checkValidity())return;
         if(input && input!==target)finish();
         if(!input){if(ctx.history.pending)return;ctx.playing=false;ctx.history.begin(ctx.project);input=target;}

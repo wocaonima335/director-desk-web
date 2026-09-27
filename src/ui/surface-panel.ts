@@ -16,10 +16,11 @@ export function createSurfacePanel(ctx:AppContext){
     const layer=()=>ctx.current()?.surface?.layers.find(l=>l.id===layerId);
     const edit=(fn:(e:Entity)=>void)=>{const e=ctx.current();if(!e||e.locked||ctx.busy)return;ctx.change(()=>fn(ctx.current()!),false);};
     const put=(key:string,value:number)=>{const e=ctx.current()!;if(key.startsWith('appearance.')){const name=key.split('.')[1];e.surface??={layers:[]};Object.assign(e.surface,{[name]:name==='ior'?value:writeChannel((e.surface as unknown as Record<string,AnimatedNumber>)[name]??value,value,ctx.time)});return;}const l=layer()!;const [name,index]=key.split('.');if(index!==undefined)(l[name as keyof SurfaceLayer] as number[])[Number(index)]=value;else Object.assign(l,{[name]:name==='opacity'?writeChannel(l.opacity,value,ctx.time):value});};
-    const finish=(cancel=false)=>{if(!activeInput)return;const field=activeInput;activeInput=null;try{if(cancel)throw Error('cancel');if(!field.checkValidity()||field.value==='')throw Error('请输入范围内的有效数值');assertProject(ctx.project);ctx.history.commit(ctx.project);ctx.changed(false);}catch(error){if(!cancel)ctx.toast((error as Error).message,true);ctx.project=ctx.history.rollback()??ctx.project;ctx.engine.project=ctx.project;ctx.engine.sample(ctx.time);ctx.renderPanels();}};
+    const finish=(cancel=false)=>{if(!activeInput)return;const denied=ctx.writeBlockedReason;const field=activeInput;activeInput=null;try{if(cancel)throw Error('cancel');if(denied)throw Error(denied);if(!field.checkValidity()||field.value==='')throw Error('请输入范围内的有效数值');assertProject(ctx.project);ctx.history.commit(ctx.project);ctx.changed(false);}catch(error){if(!cancel)ctx.toast((error as Error).message,true);ctx.project=ctx.history.rollback()??ctx.project;ctx.engine.project=ctx.project;ctx.engine.sample(ctx.time);ctx.renderPanels();}};
     window.addEventListener('blur',()=>finish());
     const host=document.querySelector('#inspector-content')!;
     host.addEventListener('input',event=>{const field=event.target as HTMLInputElement;if(!field.dataset.surfaceField||ctx.current()?.locked||ctx.busy||!field.checkValidity()||field.value==='')return;
+        if(ctx.writeBlockedReason){if(activeInput)finish(true);return;}
         if(activeInput&&activeInput!==field)finish();if(!activeInput){if(ctx.history.pending)return;ctx.history.begin(ctx.project);activeInput=field;ctx.playing=false;}
         put(field.dataset.surfaceField,Number(field.value));ctx.engine.project=ctx.project;ctx.engine.sample(ctx.time);
     });
