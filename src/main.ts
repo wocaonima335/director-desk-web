@@ -33,6 +33,7 @@ import { applyWholeDocument, WriteGate, type WholeDocumentPorts } from './scenes
 import { RecoveryAutosave } from './editor/recovery-autosave.ts';
 import { ManagedProjectController, leaveManagedBeforeSwitch, switchManagedCandidate } from './editor/managed-project.ts';
 import { mountProjectLibrary } from './ui/project-library.ts';
+import { mountDirectorShell } from './director-ui/shell.ts';
 import { readSceneDocument, projectForScene, type SceneDocument } from './scenes/sequence-project.ts';
 import type { SceneContext } from './scenes/sequence-session.ts';
 import { prepareDocumentModels } from './scenes/document-models.ts';
@@ -42,6 +43,7 @@ import './style.css';
 import './ui/responsive-panels.css';
 import './ui/asset-browser.css';
 import './ui/workspace-shell.css';
+import './director-ui/theme.css';
 import './ui/fixed-zones.css';
 import './ui/dialog-shell.css';
 import './ui/video-panel.css';
@@ -471,6 +473,7 @@ mountUpdates(async run => {
 });
 mountProjectLibrary(uiContext);
 mountApplicationMenu();
+mountDirectorShell(uiContext); // DSK-005-A：壳层在既有装配（含菜单控件移动）之后协调，见 shell.ts
 renderPanels();
 engine.select(selected);
 requestAnimationFrame(frame);

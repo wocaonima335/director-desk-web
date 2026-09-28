@@ -1,0 +1,47 @@
+task_id: DSK-005
+title: "新主题与任务式主界面"
+status: BLOCKED # 负责人要求冻结；A第二轮复审额度中断无终审结论，B/C未开始
+freeze:
+  date: "2026-09-28"
+  requested: "冻结进度，提交到远程仓库"
+  state: FROZEN
+  branch: "checkpoint/dsk-003-progress"
+  parent: "51d6042bd30e2448ed9805a61eb0ffcf05ccd159"
+  authorization: "本次只整理检查点、commit和普通push；覆盖此前提交禁止，不授权继续开发/测试/发布"
+  pending: "A第二轮已实施但终审额度中断；已有A-V1验证清理阻断发现；B/C未开始，人工PENDING"
+  evidence: "仓库外verify-dsk005-20260928T020909Z-351e3977不上传，仅提交源码/测试/管理记录"
+  resume: "明确续接后完成独立审查；阶段拟REPLAN不是终审结论，不直接派第三轮补丁"
+source_root: "E:/myProgram/DirectorDesk/director-desk-web"
+base_commit: "51d6042bd30e2448ed9805a61eb0ffcf05ccd159"
+initial_worktree: "拉取后干净；两份agent本机provider映射及审批工具更新plan为继承管理增量"
+approval:
+  approved: true
+  reference: "ExitPlanMode《DSK-005：新主题与任务式主界面》已批准"
+  plan: ".zcode/plans/plan-sess_eb0067fe-a560-495d-9531-9beb2e0d04fe.md"
+  ordering: "明确允许当前技术基线上推进005，不追认004整体PASS；004保留项不抹除，实质阻断另列"
+baseline:
+  root: "E:/myProgram/DirectorDesk/verify-dsk005-20260928T020909Z-351e3977"
+  manifest: "baseline.json"
+  sha256: "24884e9edd1da57a2c64864e74f06540465f785ea5164dadb9a55c2df59694ee"
+  files: 645
+contract_version: "现有dsk.v1/storage.v1不变；无数据迁移"
+goal: "真实切镜驱动任务式UI，默认简易/高级完整保留，能力状态诚实，真实写入保护不退化"
+tasks:
+  - {id: DSK-005-A, status: BLOCKED, title: "壳层第二轮已实施，复审中断，冻结"}
+  - {id: DSK-005-B, status: WAIT_A, title: "镜头、属性、任务状态"}
+  - {id: DSK-005-C, status: WAIT_B, title: "桌面矩阵与回归"}
+workflow: "单coder串行；每任务独立reviewer；两轮返工仍未过转planner"
+non_goals:
+  - "不实现006/007/008/016，不改公共契约/存储格式/依赖"
+  - "不修改产品引擎和存储业务，不新增通用测试工具链"
+  - "不付费调用、不安装下载、不commit/push/发布"
+verification:
+  commands: ["npm test", "npm run build", "npm run desktop:prepare", "node scripts/test-dsk-storage-desktop.mjs", "node scripts/test-dsk-ui-desktop.mjs（C创建后）"]
+  matrix: "1280x720、1920x1080各100/125/150%应用缩放；记录viewport/DPR，不冒充Windows DPI人工验收"
+  evidence: "独立隔离产物、profile/存储、截图，完整命令/时间/退出码和所有失败日志；不凭旧prepared"
+manual_acceptance:
+  status: PENDING
+  required: "新手下一步/阅读性/遮挡/键盘焦点/高级功能可达/保存语义；Windows真实DPI另列"
+  completion: "自动/独立/人工分列；人工未完成不标005整体完成"
+rollback: "精确撤所属增量，不reset/clean、不覆盖继承修改，不迁移用户数据"
+review: {verdict: PENDING}
