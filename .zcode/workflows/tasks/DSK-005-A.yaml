@@ -1,6 +1,6 @@
 task_id: DSK-005-A
 title: "任务式壳层、限定主题和简易/高级模式"
-status: BLOCKED # 已冻结；第2轮实施完成，复审额度中断；最近完整结论为首轮返工REWORK
+status: ENV_WAIVED # 用户明确跳过本机 1920 整窗环境验收并进入 B。不把该项记为已测，不表示人工视觉完成。
 freeze:
   date: "2026-09-28"
   requested: "冻结进度，提交到远程仓库"
@@ -177,6 +177,47 @@ review:
     findings: ["A-R1长按Space/Enter重复切换", "A-R3-W实际1920x1040不能证明1920x1080"]
     corrections: "全套对照仅证基线已有不稳定与候选通过样本；不证每个失败无关。Tab非完整遍历；中间单测留痕未定位；zoom仅间接依据"
     precedence: "以本复审覆盖implementation.rework1过强声明，历史保留"
+repeat_matrix_result:
+  coder: "agent_136dda3f"
+  reviewer: "agent_aa27f69b"
+  verdict: PASS
+  scope: "仅 review-02 的 repeat 单测覆盖。不表示 DSK-005-A 完成，不授权 B/C。"
+  checks:
+    - command: "node --experimental-strip-types --test tests/director-ui-shell.test.ts"
+      exit_code: 0
+      result: "15/15"
+    - command: "node node_modules/typescript/bin/tsc --noEmit"
+      exit_code: 0
+  still_unverified:
+    - "精确 1920 全窗口可见：本机 workArea 1920x1032，脚本 exit 2 BLOCKED。未改 OS，未改产品。"
+    - "A-V1 空拒绝漏判已由脚本 unhandledSeen 闭合。真实 1920 合格环境未跑到 PASS 路径。"
+window_verify:
+  script: "scripts/test-dsk005-a-desktop.mjs"
+  prepare: "npm run desktop:prepare exit 0，产物对应当前工作树"
+  run_exit_code: 2
+  result: BLOCKED
+  work_area: "1920x1032"
+  display_bounds: "1920x1080"
+  child_exit: "code 0 signal null"
+  reviewer: "agent_6258cf5b"
+  verdict: "VERIFY-01 PASS；不表示窗口可见已验证，不表示 DSK-005-A 完成"
+replan_repeat_matrix:
+  planner: "agent_ee642287"
+  reviewer: "agent_3c3c3d75"
+  reason: "第二轮技术复审确认 shell repeat 实现正确，单测未覆盖简易/高级全矩阵。"
+  allowed_changes:
+    - "tests/director-ui-shell.test.ts"
+  do_not_touch:
+    - "src/director-ui/shell.ts"
+    - "src/director-ui/theme.css"
+    - "src/main.ts"
+  shift: "不纳入。已批准验收只要求 Ctrl+Space 不劫持。"
+  blocked_separate:
+    - "精确 1920 全窗口可见"
+    - "A-V1 桌面脚本清理终态。本机没有仓库外证据根。"
+  verification:
+    - "node --experimental-strip-types --test tests/director-ui-shell.test.ts"
+    - "node node_modules/typescript/bin/tsc --noEmit"
 rework2_dispatch:
   scope: "原A白名单修repeat及真实验证，补精确窗口或明确阻塞；不自行豁免/不开始B"
   frozen: "E:/myProgram/DirectorDesk/verify-dsk005-20260928T020909Z-351e3977/A/static-review-02-snapshot/"

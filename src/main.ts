@@ -33,7 +33,7 @@ import { applyWholeDocument, WriteGate, type WholeDocumentPorts } from './scenes
 import { RecoveryAutosave } from './editor/recovery-autosave.ts';
 import { ManagedProjectController, leaveManagedBeforeSwitch, switchManagedCandidate } from './editor/managed-project.ts';
 import { mountProjectLibrary } from './ui/project-library.ts';
-import { mountDirectorShell } from './director-ui/shell.ts';
+import { mountDirectorShell, type DirectorUiRefresh } from './director-ui/shell.ts';
 import { readSceneDocument, projectForScene, type SceneDocument } from './scenes/sequence-project.ts';
 import type { SceneContext } from './scenes/sequence-session.ts';
 import { prepareDocumentModels } from './scenes/document-models.ts';
@@ -188,6 +188,7 @@ function renderPanels() {
     renderTimeline();
     renderCameras();
     updateTimeUI();
+    directorUI.refreshPanels(); // DSK-005-B：文档/选择/戏段变化后重派生镜头、属性与状态区
 }
 function renderCameras() {
     const cameras = project.entities.filter(e => e.kind === 'camera');
@@ -209,6 +210,7 @@ function updateTimeUI() {
         play.innerHTML = icon(playing ? 'pause' : 'play');
         play.setAttribute('aria-label', label);
     }
+    directorUI.refreshTime(); // DSK-005-B：播放/seek 只更新当前镜头标记，不逐帧重建列表
 }
 const labelNodes = new Map<string, HTMLButtonElement>();
 const frameFields = new Map(['object-snap-status','shot-name','shot-lens','shot-warning'].map(id => [id,$('#'+id)]));
@@ -428,6 +430,10 @@ function frame(now: number) { const delta = Math.min((now - previousFrame) / 100
         lastUI = now;
     }
 } requestAnimationFrame(frame); }
+// B-R03：装配完成前的空刷新兜底。busy 的 setter 依赖 directorUI，而 mountFileLocations 等
+// 持有 ctx 的模块在壳层挂载之前就已接线；noop 句柄避免初始化顺序上的 TDZ 引用，
+// mountDirectorShell 完成后立即替换为真实句柄。
+let directorUI: DirectorUiRefresh = { refreshPanels() { }, refreshTime() { }, refreshStatus() { } };
 const uiContext: AppContext = {
     get project() { return project; }, set project(value) { project = value; },
     get selected() { return selected; }, set selected(value) { selected = value; },
@@ -444,7 +450,7 @@ const uiContext: AppContext = {
     get revision() { return revision; },
     get writeBlockedReason() { return writeGate.denial(); },
     refuseWrite: () => writeGate.refuse(),
-    get busy() { return busy; }, set busy(value) { busy = value; },
+    get busy() { return busy; }, set busy(value) { if (busy === value) return; busy = value; directorUI.refreshStatus(); }, // B-R03：busy 翻转即时刷新保护状态区；区间空间检查等只设 busy 的路径不再依赖被 busy 跳过的帧循环
     get draft() { return draft; }, set draft(value) { draft = value; },
     get aborter() { return aborter; }, set aborter(value) { aborter = value; },
     get engine() { return engine; }, history, scenes: history, managed, drainRecovery, leaveManagedForSwitch, confirmDiscardEdits, applyDocument, switchScene, current, toast, change, changed, extendDuration, selectEntity, renderPanels, renderSidebar, renderInspector, renderTimeline, renderCameras, updateTimeUI, seek, saveProject, showModal, closeModal, projectDialog, roomDialog, sceneDialog, createNew, makeCamera, startPath, finishPath, cancelPath, replaceAction, deleteDialog, deleteEntity, seatDialog, seatApply, snapshot, exportDialog, startExport, helpDialog, updateExportSummary, setView, addAsset, addGroundPoint, retimePath, applyField, applyMotion, applyFraming, act
@@ -469,11 +475,12 @@ bindLiveFields(uiContext, editingTools.mutateField);
 mountUpdates(async run => {
     if (busy || history.pending || draft || document.querySelector('#ai-panel')?.getAttribute('data-running') === 'true') throw Error('请先完成当前编辑、导出或 AI 任务');
     busy = true; playing = false;
-    try { await recoverySave.flush(); await run(); } finally { busy = false; }
+    directorUI.refreshStatus(); // DSK-005-B：保护状态（busy）变化即时反映到状态区
+    try { await recoverySave.flush(); await run(); } finally { busy = false; directorUI.refreshStatus(); }
 });
 mountProjectLibrary(uiContext);
 mountApplicationMenu();
-mountDirectorShell(uiContext); // DSK-005-A：壳层在既有装配（含菜单控件移动）之后协调，见 shell.ts
+directorUI = mountDirectorShell(uiContext); // DSK-005-A 壳层 + DSK-005-B 三区模块，返回刷新句柄（B-R03：替换装配前兜底句柄）
 renderPanels();
 engine.select(selected);
 requestAnimationFrame(frame);
@@ -553,7 +560,7 @@ if (import.meta.env.DEV) {
     Object.assign(window, { __director: { callTool: (name: string, args: Record<string, unknown> = {}) => toolService.call(name, args), getProject: () => clone(project), getDocument: () => history.document(), getEngine: () => engine, setTime: (t: number) => { playing = false; seek(t); }, setPreview: (id: string) => { preview = id; renderCameras(); }, replaceProject: (p: Project | SceneDocument) => { selectClip(null);project = history.reset(p); revision++; selected = project.entities[0].id; time = 0; engine.rebuild(project); renderPanels(); }, signature: () => engine.projectionSignature(), exportForTest: async (opts: Parameters<typeof import('./export.ts')['exportVideo']>[1]) => { const { exportVideo } = await import('./export.ts'); const blob = await exportVideo(engine, opts, new AbortController().signal, () => { }); return blob ? Array.from(new Uint8Array(await blob.arrayBuffer())) : []; } } });
 }
 function renderSidebar() { sidebarUI.renderSidebar(); }
-function renderInspector() { clearTimeout(inspectorSeekTimer); const key = selected + ':' + inspectorTab; const scroll = key === inspectorRenderedFor ? $('#inspector-content').scrollTop : 0; inspectorUI.renderInspector(); inspectorRenderedFor = key; $('#inspector-content').scrollTop = scroll; }
+function renderInspector() { clearTimeout(inspectorSeekTimer); const key = selected + ':' + inspectorTab; const scroll = key === inspectorRenderedFor ? $('#inspector-content').scrollTop : 0; inspectorUI.renderInspector(); inspectorRenderedFor = key; $('#inspector-content').scrollTop = scroll; directorUI.refreshStatus(); } // DSK-005-B：绘制开始/结束等保护状态变化也经此刷新状态区
 function renderTimeline() { timelineUI.renderTimeline(); }
 function showModal(title: string, body: string, footer = '') { dialogsUI.showModal(title, body, footer); }
 function closeModal() { dialogsUI.closeModal(); }

@@ -443,6 +443,15 @@ try {
     console.log(`PHASE6MAX-OK: legal 67108864-byte project saved/committed (digest ${maxDocument.digest.slice(0, 12)}…)/downloaded byte-identical/re-read; 67108865 refused`);
 
 
+    // 6.1 prep (DSK-005-C): the DSK-005 shell now boots into its simple view, which hides the
+    // sidebar (and with it [data-act="add-camera"]) via CSS. Use the real mode toggle — a plain
+    // visible click, never force — to return to the advanced view so the ORIGINAL control below
+    // is reachable again. Later phases drive menu popovers, modals and #save-status, which the
+    // simple view never hides; PHASE semantics and all assertions stay unchanged.
+    await c.page.click('#director-mode-toggle');
+    await c.page.waitForFunction(
+        () => document.getElementById('app')?.dataset.directorShell === 'advanced',
+        undefined, { timeout: 10000 });
     // 6.1 R4 cancel: dirty editor + 新建 → the discard confirmation appears; cancelling keeps A.
     await c.page.click('[data-act="add-camera"]');
     await c.page.waitForFunction(

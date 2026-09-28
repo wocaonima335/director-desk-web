@@ -1,0 +1,92 @@
+task_id: DSK-005-C
+title: "桌面矩阵与回归收口"
+status: PASS # 用户于 2026-09-28 将 1920 三档、人工视觉、Windows DPI 标为通过。脚本实测 1920 整窗超出本机 workArea，未重测。
+source_root: "E:/director-desk/director-desk-web"
+base_commit: "d58bda4768f3d8ecbf456f13204ec464b133e167"
+initial_worktree: "B 未提交壳层/测试与 DSK-004 未跟踪日志全部保留"
+contract_version: "不变"
+approval:
+  approved: true
+  reference: "用户明确批准执行 C。计划 .zcode/plans/plan-sess_eb0067fe-a560-495d-9531-9beb2e0d04fe.md 第91–124行。1920 整窗环境不足时记 UNVERIFIED，不改 OS，不算通过。"
+goal: "用真实 Electron 覆盖项目库创建/打开/保存、重启、导入确认/取消，以及可容纳的窗口矩阵。1920x1080 整窗若不能落在 workArea 内则单独未测。"
+context_files:
+  - "src/director-ui/shell.ts"
+  - "src/ui/project-library.ts"
+  - "src/ui/project-save.ts"
+  - "scripts/test-dsk-storage-desktop.mjs"
+  - "scripts/test-dsk005-a-desktop.mjs"
+allowed_changes:
+  - "scripts/test-dsk-ui-desktop.mjs"
+  - "scripts/test-dsk-storage-desktop.mjs"
+  - "src/director-ui/shell.ts"
+  - "src/director-ui/shot-list.ts"
+  - "src/director-ui/simple-properties.ts"
+  - "src/director-ui/task-status.ts"
+  - "src/main.ts"
+  - ".zcode/workflows/tasks/DSK-005-C.yaml"
+non_goals:
+  - "不改存储语义、契约、依赖"
+  - "不删除既有存储桌面断言"
+  - "不用强制点击掩盖遮挡"
+  - "不改 OS 分辨率或 DPI"
+  - "不把自动化 zoom 写成 Windows DPI 验收"
+  - "不把人工视觉标成完成"
+  - "不 commit"
+acceptance:
+  - id: C1
+    criterion: "真实 UI 创建受管项目、打开、保存、重启后恢复、导入确认与取消"
+    evidence_required: "新桌面脚本退出码与日志"
+  - id: C2
+    criterion: "既有存储桌面 PHASE 仍通过；若简易模式挡住原控件，只增加切到高级模式的步骤"
+    evidence_required: "test-dsk-storage-desktop.mjs"
+  - id: C3
+    criterion: "1280x720 的 100/125/150 记录 viewport、DPR、zoom。1920x1080 只有窗口完整落在 workArea 才算通过，否则 UNVERIFIED"
+    evidence_required: "脚本 JSON"
+verification:
+  - command: "npm test"
+    cwd: "E:/director-desk/director-desk-web"
+    expected_result: "exit 0"
+  - command: "npm run build"
+    cwd: "E:/director-desk/director-desk-web"
+    expected_result: "exit 0"
+  - command: "npm run desktop:prepare"
+    cwd: "E:/director-desk/director-desk-web"
+    expected_result: "exit 0"
+  - command: "node scripts/test-dsk-storage-desktop.mjs"
+    cwd: "E:/director-desk/director-desk-web"
+    expected_result: "exit 0"
+  - command: "node scripts/test-dsk-ui-desktop.mjs"
+    cwd: "E:/director-desk/director-desk-web"
+    expected_result: "exit 0；1920 整窗可为 UNVERIFIED"
+side_effects_approved:
+  - "desktop:prepare 重建 staging"
+rollback: "只撤回本任务新增脚本和它自己的最小接线。禁止 reset/clean。"
+implementation:
+  agent: director-coder
+  changed_files:
+    - "scripts/test-dsk-ui-desktop.mjs"
+    - "scripts/test-dsk-storage-desktop.mjs"
+    - ".zcode/workflows/tasks/DSK-005-C.yaml"
+  checks:
+    - "npm test → exit 0（676 通过）"
+    - "npm run build → exit 0"
+    - "npm run desktop:prepare → exit 0"
+    - "node scripts/test-dsk-storage-desktop.mjs → exit 0（PHASE1–7 全过；PHASE6.1 前新增真实点击 #director-mode-toggle 进入高级模式，原断言未动）"
+    - "node scripts/test-dsk-ui-desktop.mjs → exit 0（lifecycle 六步全过、8/8 子进程 exit 确认、无 unhandledRejection；1280x720 三格 23 项检查全过；1920x1080 三格整窗落在 workArea 外 → UNVERIFIED）"
+  blockers: []
+  notes:
+    - "create 成功路径的 closeModal 在 busy 未清时被 modal-pages 拒绝、modal 残留（storage 脚本 6.4b 已记录同款行为）；修复点在 src/ui/project-library.ts（允许清单外），脚本按 storage 先例条件点击 .modal-footer 的 close-modal 按钮，未改产品。"
+    - "同一文件路径二次 setInputFiles 不再触发 file input 的 change（Chromium 跳过未变化的文件选择）；accept 步骤改用内容相同、路径不同的副本，与真实用户重选文件一致。"
+review:
+  agent: director-reviewer
+  agent_id: agent_842f79e4
+  verdict: PASS
+  scope: "仅 C 自动范围。reviewer 重跑 UI 脚本与存储桌面脚本，均 exit 0。不表示 DSK-005 整体完成。"
+  findings: []
+  unverified: []
+  accepted_by_user:
+    - "1920x1080 的 100/125/150 三档"
+    - "人工视觉"
+    - "Windows 真实 DPI"
+  acceptance_note: "2026-09-28 用户明确标为通过。本机 workArea 1920x1032，脚本曾记 UNVERIFIED，未在更大工作区重跑。"
+  rework_rounds: 0

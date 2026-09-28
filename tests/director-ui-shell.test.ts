@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { mountDirectorShell } from '../src/director-ui/shell.ts';
 import type { AppContext } from '../src/app-context.ts';
+import { demoProject } from '../src/model.ts';
 
 /** 最小 DOM 桩：只覆盖 shell.ts 实际使用的节点操作（含文本替换、精确 insertBefore、
  * classList、keydown 监听与合成按键事件），驱动真实装配/切换/按键逻辑；不做关键词式断言。
@@ -12,6 +14,7 @@ class StubNode {
     attrs = new Map<string, string>();
     dataset: Record<string, string> = {};
     className = ''; text = '';
+    value = ''; disabled = false; // DSK-005-B：属性输入框/禁用提交按钮需要的表单语义
     listeners = new Map<string, Array<(event?: unknown) => void>>();
     _id = '';
     constructor(tag: string) { void tag; }
@@ -77,6 +80,10 @@ class StubNode {
         for (const handler of [...(this.listeners.get('keydown') ?? [])]) handler(event);
         return recorded;
     }
+    /** 通用事件发射（B：input 事件驱动“未提交输入”标记）。 */
+    emit(type: string, event: Record<string, unknown> = {}) {
+        for (const handler of [...(this.listeners.get(type) ?? [])]) handler(event);
+    }
     focus() { doc.activeElement = this; }
     *walk(): Generator<StubNode> { yield this; for (const child of this.children) yield* child.walk(); }
 }
@@ -104,20 +111,25 @@ function buildApp() {
     const topbar = new StubNode('header'); topbar.className = 'topbar';
     const header = new StubNode('div'); header.className = 'header-actions';
     const undo = new StubNode('button'); undo.setAttribute('data-act', 'undo');
-    header.append(undo); topbar.append(header);
+    const saveStatus = new StubNode('span'); saveStatus.id = 'save-status'; saveStatus.textContent = '本地项目';
+    const aspect = new StubNode('select'); aspect.id = 'aspect';
+    header.append(undo, saveStatus, aspect); topbar.append(header);
     const workspace = new StubNode('div'); workspace.className = 'workspace';
     const sidebar = new StubNode('aside'); sidebar.className = 'sidebar';
     const center = new StubNode('section'); center.className = 'center';
     workspace.append(sidebar, center);
     app.append(topbar, workspace);
+    const duration = new StubNode('input'); duration.id = 'duration'; // 原控件位于 .transport-playback
+    app.append(duration);
     const menu = new StubNode('div'); menu.id = 'application-menu-file';
     const library = new StubNode('button'); library.id = 'project-library-open';
     const saveCopy = new StubNode('button');
     menu.append(library, saveCopy);
     docRoot.append(app, menu);
     byId.set('app', app); byId.set('project-library-open', library);
+    byId.set('save-status', saveStatus); byId.set('duration', duration); byId.set('aspect', aspect);
     bySelector.set('.header-actions', header); bySelector.set('.workspace', workspace); bySelector.set('.center', center);
-    return { app, header, menu, library, saveCopy };
+    return { app, header, menu, library, saveCopy, saveStatus, duration, aspect };
 }
 
 /** A-R2：接通的 AppContext 形状边界。state 不再是游离常量——ctx 的 getter 直接读取它，
@@ -125,12 +137,20 @@ function buildApp() {
  * 边界声明：生产 main.ts 的 dirty/revision 是模块私有值，经由 AppContext getter 暴露给 UI 模块；
  * 本测试在该边界上驱动真实 shell 路径并断言零写入。生产侧的实际 dirty=false→true、暂停时间与
  * 播放推进由 rework1 浏览器/桌面检查经生产可观测面（save-status 文案、engine.time、文档内容）
- * 证实，未添加任何生产插桩或调试 IPC。 */
+ * 证实，未添加任何生产插桩或调试 IPC。
+ * DSK-005-B 适配：补齐 B 模块读取的保护状态（busy/draft/pending/禁写/受管）与真实 demoProject，
+ * 并计数 applyField/renderCameras/toast——挂载与模式切换必须保持零调用。 */
 function makeCtx() {
-    const calls = { resize: 0, change: 0, changed: 0, seek: 0, select: 0 };
-    const state = { revision: 0, dirty: false, time: 0, selected: 'actor-a', playing: false, duration: 12 };
+    const calls = { resize: 0, change: 0, changed: 0, seek: 0, select: 0, applyField: 0, renderCameras: 0, toast: 0 };
+    const state = { revision: 0, dirty: false, time: 0, selected: 'actor-a', playing: false, duration: 12,
+        busy: false, draft: null as { id: string } | null, writeBlocked: null as string | null };
+    const project = demoProject();
     const ctx = {
-        engine: { requestResize: () => { calls.resize++; } },
+        engine: { requestResize: () => { calls.resize++; }, dragging: false, exporting: false },
+        history: { pending: null },
+        managed: { available: false, managedActive: false, unconfirmed: false, leaseOwned: false, projectName: '', projectId: '' },
+        project,
+        current: () => project.entities.find(entity => entity.id === state.selected),
         change(mutate: () => void) {
             calls.change++;
             state.revision += 1; // 与生产一致：一次真实编辑对应一次 revision 递增
@@ -141,13 +161,20 @@ function makeCtx() {
         changed() { calls.changed++; state.revision += 1; state.dirty = true; },
         seek(t: number) { calls.seek++; state.time = t; },
         selectEntity(id: string) { calls.select++; state.selected = id; },
+        applyField(key: string, value: string) { calls.applyField++; void key; void value; },
+        renderCameras() { calls.renderCameras++; },
+        toast() { calls.toast++; },
+        refuseWrite() { },
+        get writeBlockedReason() { return state.writeBlocked; },
+        get busy() { return state.busy; },
+        get draft() { return state.draft; },
         get revision() { return state.revision; },
         get dirty() { return state.dirty; },
         get time() { return state.time; },
         get selected() { return state.selected; },
         get playing() { return state.playing; },
     };
-    return { ctx: ctx as unknown as AppContext, calls, state };
+    return { ctx: ctx as unknown as AppContext, calls, state, project };
 }
 
 function toggleIn(header: StubNode) {
@@ -218,6 +245,66 @@ test('A-R1：模式按钮上的 Space/Enter 一次激活并隔离全局播放，
     assert.equal(toggle.textContent, '高级编辑', '独立 Enter 恢复正常切换');
     // 本按钮无 keyup 监听：keyup 不产生额外切换由真实键盘矩阵在浏览器/桌面检查覆盖
 });
+
+/** DSK-005-A 返工：A-R1-R2 repeat 矩阵——简易/高级起始 × Space/Enter × 暂停/播放 共八组独立
+ * fixture，node:test 默认串行执行。每组显式设定起始模式与 ctx.playing；高级起始组的一次准备
+ * 切换与首次挂载的 resize 计入基线，不计入被测序列。同一键依次发送 repeat=false/true/true/false，
+ * 每个事件之后立即逐项断言：模式恰好切到预期（首次切一次、两次 repeat 零切换、末次独立按压切回）、
+ * 该事件自身的 preventDefault 与 stopPropagation 分别精确为 1 次（不合并累计、不做布尔弱化）、
+ * calls.resize 事件增量依次为 1/0/0/1、ctx.playing 保持组内起始值、焦点仍在模式按钮、
+ * 标签与 aria-pressed 同时与模式一致。 */
+type RepeatStep = { repeat: boolean; expectedDelta: number };
+const repeatSteps: RepeatStep[] = [
+    { repeat: false, expectedDelta: 1 },
+    { repeat: true, expectedDelta: 0 },
+    { repeat: true, expectedDelta: 0 },
+    { repeat: false, expectedDelta: 1 },
+];
+const repeatFixtures = [
+    { startMode: 'simple', key: ' ', playing: false },
+    { startMode: 'simple', key: ' ', playing: true },
+    { startMode: 'simple', key: 'Enter', playing: false },
+    { startMode: 'simple', key: 'Enter', playing: true },
+    { startMode: 'advanced', key: ' ', playing: false },
+    { startMode: 'advanced', key: ' ', playing: true },
+    { startMode: 'advanced', key: 'Enter', playing: false },
+    { startMode: 'advanced', key: 'Enter', playing: true },
+] as const;
+for (const fixture of repeatFixtures) {
+    const modeName = fixture.startMode === 'simple' ? '简易' : '高级';
+    const keyName = fixture.key === ' ' ? 'Space' : 'Enter';
+    const playName = fixture.playing ? '播放中' : '暂停';
+    test(`A-R1-R2 矩阵 ${modeName}×${keyName}×${playName}：同一键 repeat=false/true/true/false 逐事件断言`, () => {
+        const { header } = buildApp();
+        const { ctx, calls, state } = makeCtx();
+        state.playing = fixture.playing; // 组内显式起始播放态：shell 全程不得改写
+        mountDirectorShell(ctx);
+        const toggle = toggleIn(header);
+        assert.equal(doc.activeElement, toggle, '挂载后焦点应在模式按钮上');
+        if (fixture.startMode === 'advanced') toggleIn(header).click(); // 准备切换：其 resize 与挂载 resize 一起计入基线
+        const domMode = () =>
+            toggle.textContent === '高级编辑' && toggle.getAttribute('aria-pressed') === 'false' ? 'simple'
+                : toggle.textContent === '简易视图' && toggle.getAttribute('aria-pressed') === 'true' ? 'advanced'
+                    : null;
+        assert.equal(domMode(), fixture.startMode, '被测序列开始前标签与 aria-pressed 必须同时等于起始模式');
+        let mode: 'simple' | 'advanced' = fixture.startMode;
+        let resizeBefore = calls.resize;
+        repeatSteps.forEach((step, index) => {
+            const recorded = toggle.press(fixture.key, { repeat: step.repeat });
+            const delta = calls.resize - resizeBefore;
+            resizeBefore = calls.resize;
+            if (!step.repeat) mode = mode === 'simple' ? 'advanced' : 'simple';
+            const where = `第 ${index + 1} 个事件（repeat=${step.repeat}）`;
+            assert.equal(recorded.prevented, 1, `${where} 自身必须恰好一次 preventDefault`);
+            assert.equal(recorded.stopped, 1, `${where} 自身必须恰好一次 stopPropagation`);
+            assert.equal(delta, step.expectedDelta, `${where} 的 resize 增量应为 ${step.expectedDelta}（整组依次 1、0、0、1）`);
+            assert.equal(domMode(), mode, `${where} 后标签与 aria-pressed 必须同时等于模式 ${mode}（repeat 期间零切换）`);
+            assert.equal(ctx.playing, fixture.playing, `${where} 后 ctx.playing 必须保持组内起始值 ${fixture.playing}`);
+            assert.equal(doc.activeElement, toggle, `${where} 后焦点必须仍在模式按钮`);
+        });
+        assert.equal(mode, fixture.startMode, '四次事件后模式应经一次切出与一次独立切回到达起始模式');
+    });
+}
 
 test('A-R2：接通状态边界——双向切换在 dirty=false/true、非零 revision、选择与暂停时间下均零写入', () => {
     const { header } = buildApp();
@@ -300,13 +387,59 @@ test('焦点守卫：焦点落入断连节点时恢复到切换按钮；可见�
     assert.equal(doc.activeElement, saveCopy);
 });
 
-test('预留分区与状态文案语义诚实，不伪装已实现', () => {
+test('B 分区渲染真实镜头/属性/状态内容，A 占位文案移除且语义保持诚实', () => {
     const { app } = buildApp();
-    const { ctx } = makeCtx();
+    const { ctx, calls } = makeCtx();
     mountDirectorShell(ctx);
     const text = [...app.walk()].map(node => node.textContent).join('\n');
-    assert.match(text, /镜头列表将在后续任务接入/);
-    assert.match(text, /简易属性将在后续任务接入/);
+    // 镜头栏来自 demoProject 真实切镜：3 镜（0–5/5–10/10–15），重复机位 A 各为一镜
+    assert.match(text, /第 1 镜 · A · 室内全景/);
+    assert.match(text, /第 2 镜 · B · 人物跟拍/);
+    assert.match(text, /第 3 镜 · A · 室内全景/);
+    assert.match(text, /切点属于下一镜/);
+    // 简易属性语义诚实：景别不猜、切镜时长只读、戏段作用域、动作交集与锁定边界
+    assert.match(text, /未标注/);
+    assert.match(text, /切镜时长（只读）/);
+    assert.match(text, /作用于整个当前戏段/);
+    assert.match(text, /不代表都在画面内/);
+    assert.match(text, /不是工作流审批/);
+    // 状态区语义诚实：模拟模式固定文案，草稿提交禁用并写明不写工程、不调用模型
     assert.match(text, /模拟模式 · 未运行工作流/);
     assert.match(text, /不会调用模型/);
+    assert.match(text, /提交已停用/);
+    assert.match(text, /不写入工程/);
+    // A 占位彻底移除，不留“后续任务接入”式假占位
+    assert.doesNotMatch(text, /将在后续任务接入/);
+    // 挂载即渲染也必须零副作用：不定位、不选中、不写焦距、不刷机位条
+    assert.equal(calls.seek + calls.select + calls.applyField + calls.renderCameras, 0);
+    assert.equal(calls.change + calls.changed, 0);
+});
+
+test('B-R03 接线：busy 开始与结束不经 updateTimeUI 也即时更新状态区，且零工程写入', () => {
+    const { app } = buildApp();
+    const { ctx, calls, state } = makeCtx();
+    const handle = mountDirectorShell(ctx);
+    const note = [...app.walk()].find(node => node.id === 'director-task-note')!;
+    const row = (name: string) => [...note.walk()].find(node => node.dataset.directorStatus === name)!;
+    handle.refreshStatus();
+    assert.match(row('busy').textContent, /忙碌：否/);
+    // 复刻生产 main.ts busy setter 的接线形态：只翻转保护状态并调用 refreshStatus()，
+    // 不经过 updateTimeUI——busy 期间帧循环本就跳过 updateTimeUI（区间空间检查等路径）。
+    state.busy = true;
+    handle.refreshStatus();
+    assert.match(row('busy').textContent, /忙碌：是/, 'busy 开始后状态区必须显示忙碌');
+    state.busy = false;
+    handle.refreshStatus();
+    assert.match(row('busy').textContent, /忙碌：否/, 'busy 结束后状态区必须恢复');
+    assert.equal(calls.change + calls.changed + calls.applyField + calls.seek + calls.select, 0, '状态刷新零工程/视图写入');
+    assert.equal(state.revision, 0);
+    assert.equal(state.dirty, false);
+});
+
+test('B-R03：main.ts busy setter 必须接线 refreshStatus（main.ts 依赖浏览器装配无法在 node 导入，做装配级源码钉住）', async () => {
+    const source = await readFile(new URL('../src/main.ts', import.meta.url), 'utf8');
+    const setter = source.match(/set busy\(value\) \{[^}]*\}/);
+    assert.ok(setter, 'uiContext 的 busy setter 应存在');
+    assert.match(setter[0], /refreshStatus\(\)/, 'busy setter 翻转后必须调用 directorUI.refreshStatus()');
+    assert.match(setter[0], /busy === value/, '同一值的重复写入不重复刷新');
 });

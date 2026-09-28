@@ -1,6 +1,6 @@
 task_id: DSK-005
 title: "新主题与任务式主界面"
-status: BLOCKED # 负责人要求冻结；A第二轮复审额度中断无终审结论，B/C未开始
+status: PASS # 2026-09-28 用户明确将 1920 三档、人工视觉、Windows DPI 标为通过。本机 workArea 仍为 1920x1032，未在更大工作区重测。
 freeze:
   date: "2026-09-28"
   requested: "冻结进度，提交到远程仓库"
@@ -27,9 +27,9 @@ baseline:
 contract_version: "现有dsk.v1/storage.v1不变；无数据迁移"
 goal: "真实切镜驱动任务式UI，默认简易/高级完整保留，能力状态诚实，真实写入保护不退化"
 tasks:
-  - {id: DSK-005-A, status: BLOCKED, title: "壳层第二轮已实施，复审中断，冻结"}
-  - {id: DSK-005-B, status: WAIT_A, title: "镜头、属性、任务状态"}
-  - {id: DSK-005-C, status: WAIT_B, title: "桌面矩阵与回归"}
+  - {id: DSK-005-A, status: PASS, title: "壳层通过；1920 整窗由用户标为通过"}
+  - {id: DSK-005-B, status: PASS, title: "镜头、属性、任务状态；普通打开后旧焦距拒绝"}
+  - {id: DSK-005-C, status: PASS, title: "桌面矩阵通过；1920 三档、人工视觉、Windows DPI 由用户标为通过"}
 workflow: "单coder串行；每任务独立reviewer；两轮返工仍未过转planner"
 non_goals:
   - "不实现006/007/008/016，不改公共契约/存储格式/依赖"
