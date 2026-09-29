@@ -1,0 +1,204 @@
+task_id: DSK-006-A
+title: "套件目录、参数校验、确定性角色映射与生成工厂"
+status: BLOCKED # 负责人冻结；第二轮进行中，最近完成独立结论为第一轮REWORK
+freeze:
+  state: FROZEN
+  date: "2026-09-29"
+  requested: "冻结DirectorDesk进度并提交远程"
+  report: ".zcode/workflows/tasks/DSK-006-freeze.md"
+  implementation_state: "第二轮修改及测试已落盘，冻结后确认进程自然结束；task交接节未追加，未独立复审，不标IMPLEMENTED或PASS"
+  validation: "r2定向02为45/45、build05为0；全量attempt03为719/721失败、attempt06最终720/721 EXIT1（唯一RP2 F1类），不记通过；RP2根因未定"
+  history: "两轮已派发，第二轮无审查结论；冻结不新增失败轮数，不直接第三轮补丁"
+  next: "新明确指令后先核第二轮源码/运行终态及证据再续验证审查，B/C等待"
+source_root: "E:/myProgram/DirectorDesk/director-desk-web"
+base_commit: "288f24aa76584965da24e90b843d8217ae4cea0c"
+initial_worktree: "661文件基线及inherited.diff见协调任务；两行agent/批准plan保护；主会话新006/A任务为管理增量"
+approval:
+  approved: true
+  reference: "ExitPlanMode DSK-006方案A已批准，规划agent_78784471-31ad-46d9-b02b-825358181eee"
+contract_version: "现有公共DTO与Project v2/SceneDocument v3不变（实际版本以现有源码为准），新参数仅本地类型"
+goal: "输入严格、输出确定、ID/引用完整的5类无下载可编辑单镜头套件"
+context_files:
+  - AGENTS.md
+  - .zcode/workflows/README.md
+  - .zcode/workflows/tasks/DSK-006.yaml
+  - .zcode/plans/plan-sess_eb0067fe-a560-495d-9531-9beb2e0d04fe.md
+  - shared/contracts/schema.ts
+  - src/model.ts
+  - src/scenes/template-builder.ts
+  - src/scenes/feature-showcases.ts
+  - src/scenes/sequence-project.ts
+  - src/cinematography/motion-presets.ts
+  - tests/feature-scenes.test.ts
+  - src/animation/library/NOTICE.txt
+allowed_changes:
+  - src/shot-pipeline/suite-catalog.ts
+  - src/shot-pipeline/suite-input.ts
+  - src/shot-pipeline/suite-ids.ts
+  - src/shot-pipeline/create-shot-suite.ts
+  - tests/shot-suites.test.ts
+  - ".zcode/workflows/tasks/DSK-006-A.yaml（implementation实际交接追加）"
+  - "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1/A/（验证副本/日志/产物）"
+non_goals:
+  - "不改已有生产文件/ID工厂/模板/引擎/schema/依赖/锁文件，不覆盖crypto"
+  - "不写UI或B/C，不提前实现AI/多镜头/事务，不新增下载资源"
+  - "不改Project/SceneDocument格式，不把roleId或配方私塞工程字段"
+  - "不commit/push/发布，不操作未知进程或真实付费资源"
+design:
+  common: "24fps，5-15秒帧对齐默认10；aspect16:9默认或9:16；同一套件版本+namespace+规范参数输出相等，输入不变；strict未知字段拒绝"
+  namespace: "必填8-16位小写字母数字；不同namespace ID集不交；明确roleId稳定ASCII顺序；同角色集合改名/重排/时长/画幅不改角色映射"
+  id_remap: "复用构造器临时UUID，返回前按受控语义键有限重标识所有实体/clip及实际引用（cuts/faceTarget/camera目标/对焦）；无随机残值，无通用字符串猜替换"
+  output: "普通可编辑Project+规范参数+独立role映射+套件版本/资源说明；映射只返回不持久化"
+  suites: "具体参数/人数/默认遵循批准plan。人物同实体路径动作，不复制场景；单相机零时刻唯一cut"
+  framing: "按实际运行时投影/白模范围和画幅构图，覆盖推进终点/环绕中段/最大间距；入出画按视锥推端点，首/末允许刻意不可见"
+  motion: "帧边界合法clips，无非预期瞬移；行走速度适配路程时长；复用push/arc必要控制点，不逐帧烘焙"
+acceptance:
+  - id: A1
+    criterion: "5×2×3=30基础组合经assertProject及现有读取/序列化往返，全部普通可编辑数据"
+  - id: A2
+    criterion: "推进/环绕、入/出、左右、双人及各数值上下界额外覆盖，不以默认30项代分支"
+  - id: A3
+    criterion: "非法人数/角色重复或不合法/主角引用错误/非法枚举/未知字段/错误类型/NaN或Infinity/帧不齐/范围越界拒绝；分支无关字段拒绝"
+  - id: A4
+    criterion: "相同规范输入+namespace深度相等、输入未改，改名/重排角色不改映射，不同namespace不碰撞，无临时随机ID残留"
+  - id: A5
+    criterion: "所有实体/clip ID唯一合规、引用正确、role指向actor、一camera一cut，无外部网络/资源依赖"
+  - id: A6
+    criterion: "逐帧运行时采样位置/朝向/姿态/相机参数有限，路径和clips时序合法，无非预期瞬移；非仅常量/快照断言"
+  - id: A7
+    criterion: "对话/对峙距离、跟随等位移、推进距离/环绕方向、入出画可见目标与参数一致；数值不冒充人工构图验收"
+verification:
+  - command: "node --experimental-strip-types --test tests/shot-suites.test.ts（创建后）"
+    cwd: "A隔离副本"
+    expected_result: "真实定向测试exit0，逐案例覆盖与失败日志保留"
+  - command: "npm test"
+    cwd: "A隔离副本"
+    expected_result: "全套真实结果；既有RP2不稳定若复现保留并限定归因，不重试掩盖、不擅修"
+  - command: "npm run build"
+    cwd: "A隔离副本"
+    expected_result: "类型检查/build/hooks成功，不把生成物回拷主树"
+side_effects_approved:
+  - "使用现有离线node_modules/test-assets的独立可写A验证副本，日志/构建生成物"
+dependencies:
+  - "Node22.14.0/npm10.9.2已核；tsc/vite/Electron/test-assets路径存在，执行能力待实测"
+  - "无.trellis，不初始化"
+stop_conditions:
+  - "白名单外改动或新依赖需求先BLOCKED；接口参数实质变更需批准"
+  - "A审查通过前B/C不启动；人工视觉留C，不自动豁免"
+rollback: "精确撤A新增量，不reset/clean，不覆盖原管理/用户修改"
+implementation:
+  agent: director-coder
+  utc: "2026-09-29T03:01:56Z"
+  changed_files:
+    - path: src/shot-pipeline/suite-catalog.ts
+      sha256: "027ba0b71694f1bc6d7e5e60ab4c1059fb1ec80310b5084f7c5e6b897fff5221"
+      note: "五套件冻结参数目录、24fps/5-15s/两画幅常量、套件版本与资源说明"
+    - path: src/shot-pipeline/suite-input.ts
+      sha256: "18f01416bac896afda463a3e6bac06d8b4dac15252841ffce987b72c5849f147"
+      note: "strict判别式校验：未知字段/分支无关字段/错误类型/非有限数/重复或不合法roleId/人数/枚举/帧对齐/越界拒绝；规范参数默认值与ASCII排序"
+    - path: src/shot-pipeline/suite-ids.ts
+      sha256: "7af3b27f2cb0cd42954621c16fa46123d0147a87c420b77d43f3493cdf32160e"
+      note: "临时UUID→受控语义键登记表；finalize重写实体/clip ID及faceTarget/camera.targetId/focusTargetId/hiddenEntityIds/cuts实际引用；assertNoTemporaryIds深扫描；未改crypto或全局ID工厂"
+    - path: src/shot-pipeline/create-shot-suite.ts
+      sha256: "d1a7a981a14f8776f55a33510fface9fdb8ac7047d21a6d1369792e95994ac73"
+      note: "工厂：复用templateBuilder/entity/clip/applyCameraMotion与configureCamera真实投影构图；单相机零时刻单cut；按路程调步速；返回普通Project+规范参数+role映射+版本/资源说明，不写配方入工程"
+    - path: tests/shot-suites.test.ts
+      sha256: "923a6f452404d2cb31226e29243353f47435f5d2726406134fbb362b022f420b"
+      note: "41用例：30基础组合(A1/A5/A6)+入出画/跟拍/推进环绕/对话对峙分支与边界(A2/A7)+52项非法拒绝(A3)+确定性与namespace不交(A4)"
+  checks:
+    - command: "node --experimental-strip-types --test tests/shot-suites.test.ts"
+      cwd: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1/A/work"
+      utc: "2026-09-29T02:36:11Z"
+      exit: 0
+      result: "41/41 pass，0 fail"
+      log: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1/A/logs/20260929T023611Z_targeted-shot-suites.log"
+    - command: "npm test"
+      cwd: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1/A/work"
+      utc: "2026-09-29T02:36:25Z"
+      exit: 0
+      result: "717/717 pass，0 fail；本轮旧RP2不稳定未复现"
+      log: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1/A/logs/20260929T023625Z_npm-test-full.log" # 修正不存在的023613笔误，旧任务在review-01快照保留
+    - command: "npm run build"
+      cwd: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1/A/work"
+      utc: "2026-09-29T03:01:41Z"
+      exit: 0
+      result: "tsc --noEmit + vite build + postbuild 隐私检查通过；生成物仅留在A/work，未回拷主树"
+      log: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T030141Z_npm-run-build.log"
+  blockers: []
+  evidence: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1/A/（work隔离副本/logs/artifacts源快照+manifest.json）"
+  rework1:
+    agent: director-coder
+    utc: "2026-09-29T08:45:00Z"
+    scope: "A-R1至A-R4修复+A-R5证据纪律；仅原A五业务文件；引擎/timeline/schema/旧UI未动"
+    changed_files:
+      - path: src/shot-pipeline/suite-ids.ts
+        sha256: "b6e5f51f567f3c949bae3849890c3b9cd0aed7badd01caaa8ce9719df33db0b0"
+        note: "A-R1：最终ID改为s-<namespace>-<key>（字母开头/限定字符集/≤35位，镜像冻结EntityIdSchema形状）；键为有界排序索引r0/r0-c0/cam；finalize返回key→finalId登记表并新增idOf；namespace结构化隔离（namespace后必为'-'，跨namespace不可能同串）；不再拼接roleId原文"
+      - path: src/shot-pipeline/create-shot-suite.ts
+        sha256: "30a310d385594bb3098c6f0ca69af9983dc62f74a37d3ac4a00fe8a53c1b2d1c"
+        note: "A-R1：person/setClips改登记表索引键，roleMap取自finalize登记表不二次拼接；A-R2：enter/exit与follow等待段rotationY=行走yaw，hold回退朝向与路径一致；A-R3：enter/exit端点由真实白模包络解出（makeActor/scaleHuman/animateActor/fitFeetToSurface+configureCamera投影，逐顶点NDC二分，边界余量2%，enter核首帧/exit核T-1/24），按新路程重算步速（≤1.8m/s上限保留）"
+      - path: tests/shot-suites.test.ts
+        sha256: "48b625c5ff0e536664f3195921ac19f8631a3d74f479d10e97c6960101d6260f"
+        note: "A-R1：真实EntityIdSchema核全部实体/clip/引用ID（8/16位、数字开头namespace、2/64位相似长角色、唯一性、跨namespace不交、排序/时长/画幅映射稳定）；A-R2：全帧wrapped yaw连续+真实rig朝向（head局部+Z世界向量）核hold/walk/stop边界；A-R3：两画幅×enter/exit×左右×5/10/15=24组合整模型离指定边+入场落位整模型入画+早越边时序；A-R4：12项明确有限分支-画幅-参数矩阵逐帧有限/连续+真实rig逐12帧关节/世界包围/贴地+完整构图范围；A3非法输入41项保留"
+      - path: src/shot-pipeline/suite-catalog.ts
+        sha256: "027ba0b71694f1bc6d7e5e60ab4c1059fb1ec80310b5084f7c5e6b897fff5221"
+        note: "本轮未修改（hash与首轮一致）"
+      - path: src/shot-pipeline/suite-input.ts
+        sha256: "18f01416bac896afda463a3e6bac06d8b4dac15252841ffce987b72c5849f147"
+        note: "本轮未修改（hash与首轮一致）"
+    checks:
+      - command: "node --experimental-strip-types --test tests/shot-suites.test.ts"
+        cwd: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1/A/rework1/work"
+        utc: "2026-09-29T08:21:40Z"
+        exit: 0
+        result: "45/45 pass，0 fail（最终源）"
+        log: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1/A/rework1/logs/20260929T082140Z_07-targeted-final.log"
+      - command: "npm test"
+        cwd: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1/A/rework1/work"
+        utc: "2026-09-29T08:22:18Z"
+        exit: 0
+        result: "721/721 pass，0 fail（最终源）；attempt03曾1例RP2 F1失败，attempt04/08限定归因为该旧测试自身不稳定（两个源状态下单独运行均15/15通过，与本五文件无导入关系），未修未重试掩盖"
+        log: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1/A/rework1/logs/20260929T082218Z_09-npm-test-full-final.log"
+      - command: "npm run build"
+        cwd: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1/A/rework1/work"
+        utc: "2026-09-29T08:20:43Z"
+        exit: 0
+        result: "tsc --noEmit + vite build + postbuild 隐私检查通过；生成物仅留在A/rework1/work；attempt05的TS18047测试类型失败日志保留"
+        log: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1/A/rework1/logs/20260929T082043Z_06-npm-run-build.log"
+    failed_attempts_preserved:
+      - "20260929T080139Z_01-targeted-shot-suites.log（4例新测试自身缺陷：17位namespace字面量/改名槽位预期/帧-秒混用）"
+      - "20260929T080451Z_03-npm-test-full.log（RP2 F1一例，归因见04/08）"
+      - "20260929T081937Z_05-npm-run-build.log（TS18047）"
+    evidence: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1/A/rework1/（work隔离副本/logs逐attempt完整输出与真实exit/artifacts输入与逐attempt五源快照/diagnostics数值脚本/manifest.json+manifest.sha256）；原A/work、A/logs、A/artifacts、review根与review-01-snapshot未写入"
+    unverified: ["真实图像构图与完整播放（C）", "UI安全新建/保存/撤销（B）", "人工首中末验收（006整体）"]
+review:
+  agent: director-reviewer
+  reference: "agent_4ab80982-d749-4f9a-90fd-d1c39d7333da"
+  verdict: REWORK
+  report: ".zcode/workflows/tasks/DSK-006-A-review-01.md"
+  continuation: "前reviewer额度中断后实例无法恢复，同指定角色接续同一次初审；不新增技术轮数"
+  findings: ["A-R1 ID字符/长度不合冻结schema", "A-R2等待转行走yaw90度跳转", "A-R3胸点出画不等完整白模", "A-R4真实rig/相机分支覆盖不足", "A-R5失败日志/中间源缺失与路径笔误"]
+  accepted: "A1/A3/A4已审通过；A2未完整；A5/A6/A7失败"
+  historical_limits: "12中途失败原始输出/runner exit/中间源未存文件，另tsc失败无完整留存；不补造，撤回全部失败保留声明。最终三日志仍可核"
+  rework_rounds: 2 # 第1轮复审REWORK，派发第2轮；结果未定
+  latest_review:
+    stage: "A第1轮返工独立复审"
+    verdict: REWORK
+    report: ".zcode/workflows/tasks/DSK-006-A-review-02.md"
+    closed: "A-R1 ID、A-R2 yaw、A-R3原出画反例闭合；A-R5本轮日志纪律改善"
+    findings: ["F1高：构图测试frame未除24传秒", "F2中：真实rig每12帧而非逐帧，完整相机矩阵未核", "F3低：probe异常释放缺统一finally"]
+    accepted: "A1/A3/A4/A5通过；A2/A6/A7未完整"
+    corrections: "RP2根因未确定，不称已证无关；manifest正文98实99；clip键r0-cc0；最大namespace用例实际15需补16；mtime不作为保护证明"
+    precedence: "本节覆盖implementation.rework1全部闭合和因果归因声明，历史保留"
+rework2_dispatch:
+  scope: "原A白名单修F1/F2及probe释放，补真实16位边界和准确记录；不改引擎/timeline/schema/旧UI"
+  frozen: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1/A/review-02-snapshot/"
+  new_evidence: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1/A/rework2/"
+  stop: "第2轮再未过转planner，不第三轮补丁；B/C等待，超范围先BLOCKED"
+  unverified: ["真实图像构图与完整播放", "UI安全新建/保存/撤销", "人工首中末验收"]
+rework1_dispatch:
+  scope: "原A五业务文件修A-R1至4；追加A-R5真实更正及新验证，不改引擎/timeline/schema/旧UI"
+  snapshot: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1/A/review-01-snapshot/"
+  evidence: "新A/rework1独立work/逐次日志及输入快照；原A/work/logs/artifacts/review/snapshot保护"
+  validation: "真实schema检查、有界ID、起止yaw连续、实际模型全身出画、明确分支/画幅矩阵及逐帧rig/相机采样；不以测试计数代语义"
+  stop: "范围/契约/参数实质变化先BLOCKED；A复审前不进B；两轮仍未过转planner；无commit/push"

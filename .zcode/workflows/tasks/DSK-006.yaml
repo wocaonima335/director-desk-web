@@ -1,0 +1,50 @@
+task_id: DSK-006
+title: "五类参数化镜头套件"
+status: BLOCKED # 按负责人要求冻结，A第二轮进行中未终审，B/C未开始
+freeze:
+  state: FROZEN
+  date: "2026-09-29"
+  requested: "冻结任务进度，提交进度到远程仓库；明确选择DirectorDesk"
+  parent: "288f24aa76584965da24e90b843d8217ae4cea0c"
+  branch: "checkpoint/dsk-003-progress"
+  authorization: "仅整理和提交普通push，覆盖原提交禁止；不授权继续开发/测试/发布"
+  report: ".zcode/workflows/tasks/DSK-006-freeze.md"
+  remaining: "A第2轮未交接/未独立复审；B/C及人工待办；不能把第1轮通过日志移用于当前源码"
+source_root: "E:/myProgram/DirectorDesk/director-desk-web"
+base_commit: "288f24aa76584965da24e90b843d8217ae4cea0c"
+initial_worktree: "两份agent本机provider及审批工具更新plan为继承管理增量，无业务修改"
+approval:
+  approved: true
+  reference: "ExitPlanMode《DSK-006：五类参数化镜头套件》已明确批准"
+  plan: ".zcode/plans/plan-sess_eb0067fe-a560-495d-9531-9beb2e0d04fe.md"
+  includes: "五套件参数/确定性映射/内部createNew Promise接口/A-B-C白名单/本地隔离验证"
+  excludes: "007/008/016、外部下载、公共契约变更、提交推送发布"
+baseline:
+  root: "E:/myProgram/DirectorDesk/verify-dsk006-20260929T013925Z-be2c34d1"
+  manifest: baseline.json
+  sha256: "a7102a1809b4a35e08c12a4352d37fbb1ede5c573ffb282542a7a57c94e38c6b"
+  files: 661
+contract_version: "dsk.v1/storage.v1及Project/SceneDocument不变；套件参数为本地TypeScript类型"
+goal: "无AI无下载生成单场景/单相机/单cut的可编辑5-15秒24fps镜头，支持两画幅"
+tasks:
+  - {id: DSK-006-A, status: BLOCKED, title: "第2轮返工进行中冻结，未终审"}
+  - {id: DSK-006-B, status: WAIT_A, title: "表单与安全新建"}
+  - {id: DSK-006-C, status: WAIT_B, title: "视觉、播放与桌面验证"}
+workflow: "单coder串行，每任务独立reviewer；两轮返工仍未过转planner"
+parameters: "按批准plan参数表冻结：dialogue2人1.2-2.4m；enter/exit1人；follow1人2-6m；push/orbit1-2人0.5-1.5m或15-45度；standoff2人1.5-3m"
+identity: "显式8-16小写字母数字namespace；同参数/角色集合/namespace输出确定，有限语义重标识全部引用；role映射不持久化配方"
+non_goals:
+  - "不新增依赖/锁文件/公共IPC/工程字段/迁移，不改全局ID工厂或crypto，不实现多镜头或AI"
+  - "不安装下载、不操作未知进程、不付费、不commit/push/发布"
+  - "provider保持本地，不写产品BYOK，不修改全局配置或Git忽略策略"
+verification:
+  commands: ["npm test", "npm run build", "npm run desktop:prepare", "node scripts/verify-shot-suites.mjs（C新增后）", "node scripts/test-shot-suites-desktop.mjs（C新增后）"]
+  evidence: "隔离产物与profile，命令UTC/cwd/源版本/退出码/全部失败保留；子进程退出确认不吞错"
+  matrix: "五套件×两画幅×5/10/15秒30基础案例及分支边界；首中末0/T2/T-1帧，实际program对应画幅"
+manual_acceptance:
+  status: PENDING
+  required: "30基础与关键分支首中末/完整播放观看，构图/入出画/步滑/跟拍/穿模裁切/编辑后播放"
+  limit: "不继承005人工豁免；未完成不标006整体完成"
+dependencies: ["005按最新用户决定接受，归档未实测边界保留，不重开旧流程"]
+rollback: "精确撤本任务增量，不reset/clean、不覆盖既有成果或用户工程"
+review: {verdict: PENDING}
